@@ -10,6 +10,10 @@ const wss = new WebSocketServer({ server });
 const port = Number(process.env.PORT || 3000);
 const rooms = new Map();
 
+function log(...parts) {
+  console.log(new Date().toISOString(), ...parts);
+}
+
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     rooms.set(roomId, {
@@ -93,6 +97,8 @@ wss.on('connection', (ws, req) => {
   ws.clientType = clientType;
   ws.roomId = roomId;
 
+  log('client_connected', { clientType, roomId, ip: req.socket.remoteAddress });
+
   if (clientType === 'publisher') {
     if (room.publisher && room.publisher.readyState === WebSocket.OPEN) {
       safeSend(room.publisher, { type: 'warning', message: 'Publisher replaced by a new connection' });
@@ -155,11 +161,25 @@ wss.on('connection', (ws, req) => {
       sequence: room.lastFrame.sequence
     };
 
+    if (!room._lastLoggedSequence || room.lastFrame.sequence - room._lastLoggedSequence >= 10) {
+      room._lastLoggedSequence = room.lastFrame.sequence;
+      log('frame_received', {
+        roomId,
+        sequence: room.lastFrame.sequence,
+        size: `${room.lastFrame.width}x${room.lastFrame.height}`,
+        viewers: room.viewers.size
+      });
+    }
+
     for (const viewer of room.viewers) {
       if (viewer.readyState === WebSocket.OPEN) {
         viewer.send(JSON.stringify(room.lastFrame));
       }
     }
+  });
+
+  ws.on('error', (error) => {
+    log('client_error', { clientType: ws.clientType, roomId: ws.roomId, message: error.message });
   });
 
   ws.on('close', () => {
@@ -174,9 +194,17 @@ wss.on('connection', (ws, req) => {
     }
 
     if (!currentRoom.publisher && currentRoom.viewers.size === 0) {
+      log('room_removed', { roomId: ws.roomId });
       rooms.delete(ws.roomId);
       return;
     }
+
+    log('client_closed', {
+      clientType: ws.clientType,
+      roomId: ws.roomId,
+      hasPublisher: Boolean(currentRoom.publisher),
+      viewers: currentRoom.viewers.size
+    });
 
     broadcastRoomState(ws.roomId);
   });

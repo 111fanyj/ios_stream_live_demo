@@ -231,7 +231,7 @@
         <aside class="panel">
           <label>
             服务端地址
-            <input id="serverUrl" value="ws://localhost:3000" />
+            <input id="serverUrl" />
           </label>
           <label>
             房间 ID
@@ -283,6 +283,13 @@
       const statusLabel = document.getElementById('statusLabel');
 
       let socket;
+
+      function defaultServerUrl() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${protocol}//${window.location.host}`;
+      }
+
+      serverUrlInput.value = defaultServerUrl();
 
       function setLiveState(isLive) {
         statusDot.classList.toggle('live', isLive);

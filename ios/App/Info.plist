@@ -22,6 +22,17 @@
 	<string>1</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>用于将屏幕直播数据发送到本地或远端服务器。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_iosstreamviewer._tcp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

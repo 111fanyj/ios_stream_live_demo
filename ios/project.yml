@@ -20,6 +20,11 @@ targets:
       properties:
         CFBundleDisplayName: IOSStreamViewer
         UILaunchScreen: {}
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        NSBonjourServices:
+          - _iosstreamviewer._tcp
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         NSLocalNetworkUsageDescription: 用于将屏幕直播数据发送到本地或远端服务器。
@@ -42,6 +47,9 @@ targets:
       path: BroadcastUploadExtension/Info.plist
       properties:
         CFBundleDisplayName: IOSStreamViewer
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
         NSExtension:
           NSExtensionAttributes:
             RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer

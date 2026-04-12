@@ -143,20 +143,10 @@
 					04ADE56F9EDD0F0A0D4E5461 = {
 						DevelopmentTeam = 6RM2TN4K2V;
 						ProvisioningStyle = Automatic;
-						SystemCapabilities = {
-							com.apple.ApplicationGroups.iOS = {
-								enabled = 1;
-							};
-						};
 					};
 					669EAEAEB27C2E816270F2D1 = {
 						DevelopmentTeam = 6RM2TN4K2V;
 						ProvisioningStyle = Automatic;
-						SystemCapabilities = {
-							com.apple.ApplicationGroups.iOS = {
-								enabled = 1;
-							};
-						};
 					};
 				};
 			};

@@ -5,6 +5,11 @@ enum StreamDefaults {
     static let serverURLKey = "stream.serverURL"
     static let roomIDKey = "stream.roomID"
     static let tokenKey = "stream.token"
+    static let diagnosticsStatusKey = "stream.diagnostics.status"
+    static let diagnosticsLastErrorKey = "stream.diagnostics.lastError"
+    static let diagnosticsUpdatedAtKey = "stream.diagnostics.updatedAt"
+    static let diagnosticsSentFrameCountKey = "stream.diagnostics.sentFrameCount"
+    static let diagnosticsLastFrameAtKey = "stream.diagnostics.lastFrameAt"
 }
 
 struct StreamConfiguration {
