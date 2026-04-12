@@ -44,8 +44,8 @@
 		265BD8A8443062E9F2EFA04E /* StreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamConfiguration.swift; sourceTree = "<group>"; };
 		3510887441D2C1A692423B76 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		4AF067BC4FC27BC25474BF30 /* BroadcastPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastPickerButton.swift; sourceTree = "<group>"; };
-		5C619DD5068AA1FE5923689A /* IOSStreamViewer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IOSStreamViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		717A7BFD9E378005EFD51357 /* BroadcastUploadExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BroadcastUploadExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		5C619DD5068AA1FE5923689A /* IOSStreamViewer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IOSStreamViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		717A7BFD9E378005EFD51357 /* BroadcastUploadExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BroadcastUploadExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		8B23B99ED4466182E7A740E5 /* SharedStreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedStreamConfiguration.swift; sourceTree = "<group>"; };
 		CC06E2357A43F9C902D3C27A /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
 		F8342D7852CD915F4660913F /* IOSStreamViewerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSStreamViewerApp.swift; sourceTree = "<group>"; };
@@ -139,14 +139,6 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
-				TargetAttributes = {
-					04ADE56F9EDD0F0A0D4E5461 = {
-						DevelopmentTeam = "";
-					};
-					669EAEAEB27C2E816270F2D1 = {
-						DevelopmentTeam = "";
-					};
-				};
 			};
 			buildConfigurationList = C3CC053A412F33F322B4C775 /* Build configuration list for PBXProject "IOSStreamViewer" */;
 			developmentRegion = en;
@@ -206,6 +198,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/IOSStreamViewer.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 6RM2TN4K2V;
 				INFOPLIST_FILE = App/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -223,6 +216,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/IOSStreamViewer.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 6RM2TN4K2V;
 				INFOPLIST_FILE = App/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -299,6 +293,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = BroadcastUploadExtension/BroadcastUploadExtension.entitlements;
+				DEVELOPMENT_TEAM = 6RM2TN4K2V;
 				INFOPLIST_FILE = BroadcastUploadExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -317,6 +312,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = BroadcastUploadExtension/BroadcastUploadExtension.entitlements;
+				DEVELOPMENT_TEAM = 6RM2TN4K2V;
 				INFOPLIST_FILE = BroadcastUploadExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
