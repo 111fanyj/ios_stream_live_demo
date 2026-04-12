@@ -54,7 +54,6 @@ open IOSStreamViewer.xcodeproj
 
 - App target 和 Extension target 都开启同一个 App Group。
 - 主 App 中的 `StreamDefaults.appGroupIdentifier` 与 Extension 保持一致。
-- `StreamDefaults.preferredExtensionBundleIdentifier` 与 Extension Bundle ID 保持一致。
 
 对应源码位置：
 

@@ -43,6 +43,8 @@ targets:
       properties:
         CFBundleDisplayName: IOSStreamViewer
         NSExtension:
+          NSExtensionAttributes:
+            RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
           NSExtensionPointIdentifier: com.apple.broadcast-services-upload
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
     entitlements:

@@ -5,7 +5,6 @@ enum StreamDefaults {
     static let serverURLKey = "stream.serverURL"
     static let roomIDKey = "stream.roomID"
     static let tokenKey = "stream.token"
-    static let preferredExtensionBundleIdentifier = "com.example.IOSStreamViewer.BroadcastUploadExtension"
 }
 
 struct StreamConfiguration {

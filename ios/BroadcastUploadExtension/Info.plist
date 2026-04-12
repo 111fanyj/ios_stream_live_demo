@@ -22,6 +22,11 @@
 	<string>1</string>
 	<key>NSExtension</key>
 	<dict>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>RPBroadcastProcessMode</key>
+			<string>RPBroadcastProcessModeSampleBuffer</string>
+		</dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.broadcast-services-upload</string>
 		<key>NSExtensionPrincipalClass</key>
