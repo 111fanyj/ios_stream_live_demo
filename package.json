@@ -1,0 +1,13 @@
+{
+  "name": "ios-stream-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal iOS screen streaming demo with a Node.js relay server",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}
