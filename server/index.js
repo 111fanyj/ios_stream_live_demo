@@ -9,6 +9,7 @@ const wss = new WebSocketServer({ server });
 
 const port = Number(process.env.PORT || 3000);
 const rooms = new Map();
+let nextClientId = 1;
 
 function log(...parts) {
   console.log(new Date().toISOString(), ...parts);
@@ -18,14 +19,34 @@ function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     rooms.set(roomId, {
       publisher: null,
-      viewers: new Set(),
-      lastFrame: null,
-      lastMeta: null,
+      viewers: new Map(),
       publisherConnectedAt: null
     });
   }
 
   return rooms.get(roomId);
+}
+
+function makeClientId() {
+  const sequence = nextClientId;
+  nextClientId += 1;
+  return `client-${Date.now().toString(36)}-${sequence.toString(36)}`;
+}
+
+function getViewerIds(room) {
+  return Array.from(room.viewers.keys());
+}
+
+function getClientById(room, clientId) {
+  if (!clientId) {
+    return null;
+  }
+
+  if (room.publisher && room.publisher.clientId === clientId) {
+    return room.publisher;
+  }
+
+  return room.viewers.get(clientId) ?? null;
 }
 
 function broadcastRoomState(roomId) {
@@ -34,25 +55,21 @@ function broadcastRoomState(roomId) {
     type: 'room_state',
     roomId,
     hasPublisher: Boolean(room.publisher),
+    publisherId: room.publisher?.clientId ?? null,
     viewerCount: room.viewers.size,
     publisherConnectedAt: room.publisherConnectedAt,
-    lastMeta: room.lastMeta
+    transport: 'webrtc-datachannel'
   });
 
-  for (const viewer of room.viewers) {
+  for (const viewer of room.viewers.values()) {
     if (viewer.readyState === WebSocket.OPEN) {
       viewer.send(payload);
     }
   }
-}
 
-function sendLastFrame(ws, roomId) {
-  const room = getRoom(roomId);
-  if (!room.lastFrame || ws.readyState !== WebSocket.OPEN) {
-    return;
+  if (room.publisher?.readyState === WebSocket.OPEN) {
+    room.publisher.send(payload);
   }
-
-  ws.send(JSON.stringify(room.lastFrame));
 }
 
 function safeSend(ws, payload) {
@@ -68,7 +85,8 @@ app.get('/health', (_req, res) => {
     roomId,
     hasPublisher: Boolean(room.publisher),
     viewerCount: room.viewers.size,
-    lastMeta: room.lastMeta
+    publisherConnectedAt: room.publisherConnectedAt,
+    transport: 'webrtc-datachannel'
   }));
 
   res.json({ ok: true, rooms: roomSummary });
@@ -96,8 +114,9 @@ wss.on('connection', (ws, req) => {
   const room = getRoom(roomId);
   ws.clientType = clientType;
   ws.roomId = roomId;
+  ws.clientId = makeClientId();
 
-  log('client_connected', { clientType, roomId, ip: req.socket.remoteAddress });
+  log('client_connected', { clientType, roomId, clientId: ws.clientId, ip: req.socket.remoteAddress });
 
   if (clientType === 'publisher') {
     if (room.publisher && room.publisher.readyState === WebSocket.OPEN) {
@@ -110,27 +129,43 @@ wss.on('connection', (ws, req) => {
 
     safeSend(ws, {
       type: 'publisher_ready',
+      clientId: ws.clientId,
       roomId,
-      viewerCount: room.viewers.size
+      viewerCount: room.viewers.size,
+      viewerIds: getViewerIds(room)
     });
+
+    for (const viewerId of getViewerIds(room)) {
+      safeSend(ws, {
+        type: 'viewer_joined',
+        viewerId
+      });
+    }
+
     broadcastRoomState(roomId);
   } else {
-    room.viewers.add(ws);
+    room.viewers.set(ws.clientId, ws);
     safeSend(ws, {
       type: 'viewer_ready',
+      clientId: ws.clientId,
       roomId,
       hasPublisher: Boolean(room.publisher),
-      viewerCount: room.viewers.size
+      publisherId: room.publisher?.clientId ?? null,
+      viewerCount: room.viewers.size,
+      transport: 'webrtc-datachannel'
     });
+
+    if (room.publisher) {
+      safeSend(room.publisher, {
+        type: 'viewer_joined',
+        viewerId: ws.clientId
+      });
+    }
+
     broadcastRoomState(roomId);
-    sendLastFrame(ws, roomId);
   }
 
   ws.on('message', (rawMessage) => {
-    if (ws.clientType !== 'publisher') {
-      return;
-    }
-
     let message;
     try {
       message = JSON.parse(rawMessage.toString());
@@ -139,47 +174,55 @@ wss.on('connection', (ws, req) => {
       return;
     }
 
-    if (message.type !== 'frame' || typeof message.imageData !== 'string') {
+    if (message.type !== 'signal' || !message.targetId || !message.signal) {
       safeSend(ws, { type: 'error', message: 'Unsupported message format' });
       return;
     }
 
-    room.lastFrame = {
-      type: 'frame',
-      roomId,
-      imageData: message.imageData,
-      mimeType: message.mimeType || 'image/jpeg',
-      width: message.width || null,
-      height: message.height || null,
-      timestamp: message.timestamp || Date.now(),
-      sequence: message.sequence || null
-    };
-    room.lastMeta = {
-      width: room.lastFrame.width,
-      height: room.lastFrame.height,
-      timestamp: room.lastFrame.timestamp,
-      sequence: room.lastFrame.sequence
-    };
-
-    if (!room._lastLoggedSequence || room.lastFrame.sequence - room._lastLoggedSequence >= 10) {
-      room._lastLoggedSequence = room.lastFrame.sequence;
-      log('frame_received', {
-        roomId,
-        sequence: room.lastFrame.sequence,
-        size: `${room.lastFrame.width}x${room.lastFrame.height}`,
-        viewers: room.viewers.size
-      });
+    const targetClient = getClientById(room, message.targetId);
+    if (!targetClient) {
+      safeSend(ws, { type: 'error', message: 'Target client is unavailable' });
+      return;
     }
 
-    for (const viewer of room.viewers) {
-      if (viewer.readyState === WebSocket.OPEN) {
-        viewer.send(JSON.stringify(room.lastFrame));
-      }
+    if (targetClient.clientType === ws.clientType) {
+      safeSend(ws, { type: 'error', message: 'Signals must be sent to the opposite client type' });
+      return;
+    }
+
+    safeSend(targetClient, {
+      type: 'signal',
+      roomId,
+      sourceId: ws.clientId,
+      signal: message.signal
+    });
+
+    if (message.signal.type === 'offer' || message.signal.type === 'answer') {
+      log('webrtc_description_relayed', {
+        roomId,
+        sourceId: ws.clientId,
+        targetId: message.targetId,
+        descriptionType: message.signal.type
+      });
+      return;
+    }
+
+    if (message.signal.type === 'candidate') {
+      log('webrtc_candidate_relayed', {
+        roomId,
+        sourceId: ws.clientId,
+        targetId: message.targetId
+      });
     }
   });
 
   ws.on('error', (error) => {
-    log('client_error', { clientType: ws.clientType, roomId: ws.roomId, message: error.message });
+    log('client_error', {
+      clientType: ws.clientType,
+      roomId: ws.roomId,
+      clientId: ws.clientId,
+      message: error.message
+    });
   });
 
   ws.on('close', () => {
@@ -187,10 +230,24 @@ wss.on('connection', (ws, req) => {
     if (ws.clientType === 'publisher' && currentRoom.publisher === ws) {
       currentRoom.publisher = null;
       currentRoom.publisherConnectedAt = null;
+
+      for (const viewer of currentRoom.viewers.values()) {
+        safeSend(viewer, {
+          type: 'publisher_left',
+          publisherId: ws.clientId
+        });
+      }
     }
 
     if (ws.clientType === 'viewer') {
-      currentRoom.viewers.delete(ws);
+      currentRoom.viewers.delete(ws.clientId);
+
+      if (currentRoom.publisher) {
+        safeSend(currentRoom.publisher, {
+          type: 'viewer_left',
+          viewerId: ws.clientId
+        });
+      }
     }
 
     if (!currentRoom.publisher && currentRoom.viewers.size === 0) {
@@ -202,6 +259,7 @@ wss.on('connection', (ws, req) => {
     log('client_closed', {
       clientType: ws.clientType,
       roomId: ws.roomId,
+      clientId: ws.clientId,
       hasPublisher: Boolean(currentRoom.publisher),
       viewers: currentRoom.viewers.size
     });

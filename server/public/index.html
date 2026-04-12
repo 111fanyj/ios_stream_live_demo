@@ -223,7 +223,7 @@
       <section class="hero">
         <h1>iPhone 当前屏幕实时查看</h1>
         <p>
-          这个页面作为查看端。iOS App 启动屏幕广播后，Broadcast Extension 会把屏幕帧通过 WebSocket 推送到服务端，这里实时展示最新画面。
+          这个页面作为查看端。iOS App 启动屏幕广播后，Broadcast Extension 会通过 WebRTC DataChannel 把 JPEG 帧发送到浏览器，这里实时展示最新画面。
         </p>
       </section>
 
@@ -244,8 +244,9 @@
           <button id="connectButton">连接查看</button>
 
           <div class="meta">
-            <div>连接状态: <strong id="connectionState">未连接</strong></div>
+            <div>信令状态: <strong id="connectionState">未连接</strong></div>
             <div>发布端状态: <strong id="publisherState">未检测到</strong></div>
+            <div>WebRTC 状态: <strong id="rtcState">未建立</strong></div>
             <div>查看人数: <strong id="viewerCount">0</strong></div>
             <div>最新帧: <strong id="lastFrameMeta">暂无</strong></div>
           </div>
@@ -274,6 +275,7 @@
       const connectButton = document.getElementById('connectButton');
       const connectionState = document.getElementById('connectionState');
       const publisherState = document.getElementById('publisherState');
+      const rtcState = document.getElementById('rtcState');
       const viewerCount = document.getElementById('viewerCount');
       const lastFrameMeta = document.getElementById('lastFrameMeta');
       const frameView = document.getElementById('frameView');
@@ -282,11 +284,15 @@
       const statusDot = document.getElementById('statusDot');
       const statusLabel = document.getElementById('statusLabel');
 
-      let socket;
+      let signalingSocket;
+      let peerConnection;
+      let frameChannel;
+      let currentPublisherId = null;
+      let hasRemoteDescription = false;
+      let pendingCandidates = [];
 
       function defaultServerUrl() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${protocol}//${window.location.host}`;
+        return window.location.origin;
       }
 
       serverUrlInput.value = defaultServerUrl();
@@ -294,27 +300,112 @@
       function setLiveState(isLive) {
         statusDot.classList.toggle('live', isLive);
         statusLabel.textContent = isLive ? '直播中' : '等待直播';
-        publisherState.textContent = isLive ? '已连接' : '未检测到';
+      }
+
+      function setPublisherState(text) {
+        publisherState.textContent = text;
       }
 
       function setConnectionText(text) {
         connectionState.textContent = text;
       }
 
+      function setRTCText(text) {
+        rtcState.textContent = text;
+      }
+
+      function resetFrameView() {
+        frameView.removeAttribute('src');
+        frameView.hidden = true;
+        emptyState.hidden = false;
+        lastFrameMeta.textContent = '暂无';
+      }
+
+      function closePeerConnection() {
+        if (frameChannel) {
+          frameChannel.onopen = null;
+          frameChannel.onclose = null;
+          frameChannel.onerror = null;
+          frameChannel.onmessage = null;
+          frameChannel = null;
+        }
+
+        if (peerConnection) {
+          peerConnection.onicecandidate = null;
+          peerConnection.onconnectionstatechange = null;
+          peerConnection.ondatachannel = null;
+          peerConnection.close();
+          peerConnection = null;
+        }
+
+        hasRemoteDescription = false;
+        pendingCandidates = [];
+        setRTCText('未建立');
+      }
+
       function closeSocket() {
-        if (socket) {
-          socket.onclose = null;
-          socket.close();
-          socket = null;
+        if (signalingSocket) {
+          signalingSocket.onclose = null;
+          signalingSocket.close();
+          signalingSocket = null;
         }
       }
 
-      connectButton.addEventListener('click', () => {
+      function closeConnection() {
+        closePeerConnection();
         closeSocket();
+        currentPublisherId = null;
+      }
 
-        const baseUrl = serverUrlInput.value.trim().replace(/\/$/, '');
-        const roomId = roomIdInput.value.trim() || 'demo-room';
-        const token = tokenInput.value.trim();
+      function attachFrameChannel(channel) {
+        frameChannel = channel;
+
+        frameChannel.onopen = () => {
+          setRTCText('DataChannel 已连接');
+          setConnectionText('信令已连接');
+        };
+
+        frameChannel.onclose = () => {
+          setRTCText('DataChannel 已关闭');
+        };
+
+        frameChannel.onerror = () => {
+          setRTCText('DataChannel 异常');
+        };
+
+        frameChannel.onmessage = (event) => {
+          const text = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+          const message = JSON.parse(text);
+
+          if (message.type !== 'frame') {
+            return;
+          }
+
+          const dataUrl = `data:${message.mimeType};base64,${message.imageData}`;
+          frameView.src = dataUrl;
+          frameView.hidden = false;
+          emptyState.hidden = true;
+          lastFrameMeta.textContent = `${message.width || '?'} x ${message.height || '?'} / ${new Date(message.timestamp).toLocaleTimeString()}`;
+          setLiveState(true);
+          setPublisherState('已连接');
+        };
+      }
+
+      function sendSignal(targetId, signal) {
+        if (!signalingSocket || signalingSocket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        signalingSocket.send(
+          JSON.stringify({
+            type: 'signal',
+            targetId,
+            signal,
+          })
+        );
+      }
+
+      function buildSignalUrl(baseUrl, roomId, token) {
         const url = new URL(baseUrl);
 
         if (url.protocol === 'http:') {
@@ -331,36 +422,152 @@
           url.searchParams.set('token', token);
         }
 
-        viewerTitle.textContent = `房间 ${roomId}`;
-        setConnectionText('连接中');
-        socket = new WebSocket(url);
+        return url;
+      }
 
-        socket.onopen = () => {
-          setConnectionText('已连接');
+      function ensurePeerConnection(publisherId) {
+        if (peerConnection && currentPublisherId === publisherId) {
+          return peerConnection;
+        }
+
+        const preservedCandidates = !peerConnection && currentPublisherId === publisherId ? pendingCandidates : [];
+        closePeerConnection();
+        pendingCandidates = preservedCandidates;
+        currentPublisherId = publisherId;
+
+        peerConnection = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        });
+
+        peerConnection.onicecandidate = (event) => {
+          if (!event.candidate || !currentPublisherId) {
+            return;
+          }
+
+          sendSignal(currentPublisherId, {
+            type: 'candidate',
+            candidate: event.candidate.toJSON(),
+          });
         };
 
-        socket.onmessage = (event) => {
+        peerConnection.ondatachannel = (event) => {
+          attachFrameChannel(event.channel);
+        };
+
+        peerConnection.onconnectionstatechange = () => {
+          const state = peerConnection.connectionState;
+          const labelMap = {
+            new: '准备中',
+            connecting: '连接中',
+            connected: '已连接',
+            disconnected: '已断开',
+            failed: '失败',
+            closed: '已关闭',
+          };
+
+          setRTCText(labelMap[state] || state);
+
+          if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+            setLiveState(false);
+          }
+        };
+
+        return peerConnection;
+      }
+
+      async function flushPendingCandidates() {
+        if (!peerConnection || !hasRemoteDescription) {
+          return;
+        }
+
+        while (pendingCandidates.length > 0) {
+          const candidate = pendingCandidates.shift();
+          await peerConnection.addIceCandidate(candidate);
+        }
+      }
+
+      connectButton.addEventListener('click', () => {
+        closeConnection();
+        resetFrameView();
+        setLiveState(false);
+        setPublisherState('未检测到');
+        setRTCText('等待信令');
+
+        const baseUrl = serverUrlInput.value.trim().replace(/\/$/, '');
+        const roomId = roomIdInput.value.trim() || 'demo-room';
+        const token = tokenInput.value.trim();
+        const url = buildSignalUrl(baseUrl, roomId, token);
+
+        viewerTitle.textContent = `房间 ${roomId}`;
+        setConnectionText('信令连接中');
+        signalingSocket = new WebSocket(url);
+
+        signalingSocket.onopen = () => {
+          setConnectionText('信令已连接');
+        };
+
+        signalingSocket.onmessage = async (event) => {
           const message = JSON.parse(event.data);
 
           if (message.type === 'room_state') {
-            setLiveState(Boolean(message.hasPublisher));
+            setPublisherState(message.hasPublisher ? '已连接' : '未检测到');
             viewerCount.textContent = String(message.viewerCount || 0);
+            if (message.publisherId) {
+              currentPublisherId = message.publisherId;
+            }
+            if (!message.hasPublisher) {
+              closePeerConnection();
+              setLiveState(false);
+            }
             return;
           }
 
           if (message.type === 'viewer_ready') {
-            setLiveState(Boolean(message.hasPublisher));
+            setPublisherState(message.hasPublisher ? '已连接' : '未检测到');
             viewerCount.textContent = String(message.viewerCount || 0);
+            currentPublisherId = message.publisherId || null;
+            setRTCText(message.hasPublisher ? '等待 offer' : '等待发布端');
             return;
           }
 
-          if (message.type === 'frame') {
-            const dataUrl = `data:${message.mimeType};base64,${message.imageData}`;
-            frameView.src = dataUrl;
-            frameView.hidden = false;
-            emptyState.hidden = true;
-            lastFrameMeta.textContent = `${message.width || '?'} x ${message.height || '?'} / ${new Date(message.timestamp).toLocaleTimeString()}`;
-            setLiveState(true);
+          if (message.type === 'signal') {
+            currentPublisherId = message.sourceId;
+
+            if (message.signal.type === 'offer') {
+              const connection = ensurePeerConnection(message.sourceId);
+              await connection.setRemoteDescription({
+                type: 'offer',
+                sdp: message.signal.sdp,
+              });
+              hasRemoteDescription = true;
+              await flushPendingCandidates();
+
+              const answer = await connection.createAnswer();
+              await connection.setLocalDescription(answer);
+              sendSignal(message.sourceId, {
+                type: 'answer',
+                sdp: answer.sdp,
+              });
+              setRTCText('已发送 answer');
+            }
+
+            if (message.signal.type === 'candidate') {
+              const candidate = new RTCIceCandidate(message.signal.candidate);
+              if (peerConnection && hasRemoteDescription) {
+                await peerConnection.addIceCandidate(candidate);
+              } else {
+                pendingCandidates.push(candidate);
+              }
+            }
+
+            return;
+          }
+
+          if (message.type === 'publisher_left') {
+            closePeerConnection();
+            currentPublisherId = null;
+            setPublisherState('未检测到');
+            setLiveState(false);
             return;
           }
 
@@ -369,12 +576,14 @@
           }
         };
 
-        socket.onerror = () => {
-          setConnectionText('连接异常');
+        signalingSocket.onerror = () => {
+          setConnectionText('信令异常');
         };
 
-        socket.onclose = () => {
+        signalingSocket.onclose = () => {
+          closePeerConnection();
           setConnectionText('已断开');
+          setPublisherState('未检测到');
           setLiveState(false);
         };
       });

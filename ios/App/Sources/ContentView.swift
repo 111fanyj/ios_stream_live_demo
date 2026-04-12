@@ -18,7 +18,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("iOS 实时屏幕推流")
                             .font(.system(size: 34, weight: .bold, design: .rounded))
-                        Text("先保存服务端地址，再通过系统屏幕录制入口启动 Broadcast Extension。Server 收到后可以在网页里实时查看当前画面。")
+                        Text("先保存服务端地址，再通过系统屏幕录制入口启动 Broadcast Extension。扩展会通过 WebRTC DataChannel 把屏幕帧发给网页查看端。")
                             .foregroundStyle(.secondary)
                     }
 
@@ -26,7 +26,7 @@ struct ContentView: View {
                         Text("推流配置")
                             .font(.headline)
 
-                        TextField("ws://192.168.1.10:3000", text: $configuration.serverURL)
+                        TextField("http://192.168.1.10:3000", text: $configuration.serverURL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .textFieldStyle(.roundedBorder)
@@ -112,7 +112,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("启动直播")
                             .font(.headline)
-                        Text("系统按钮会直接调起 ReplayKit 的广播选择器。")
+                        Text("系统按钮会直接调起 ReplayKit 的广播选择器，随后由扩展通过 WebRTC 建链。")
                             .foregroundStyle(.secondary)
                             .font(.subheadline)
 
@@ -136,8 +136,8 @@ struct ContentView: View {
                             .font(.headline)
 
                         Text("1. 手机与服务端保持网络可达。")
-                        Text("2. 先保存 ws 服务地址，例如 ws://你的电脑IP:3000。")
-                        Text("3. 浏览器打开服务端首页，填同一个房间 ID。")
+                        Text("2. 先保存服务端地址，例如 http://你的电脑IP:3000。")
+                        Text("3. 浏览器打开服务端首页，填同一个房间 ID，页面会通过 WebRTC 等待发布端。")
                         Text("4. 长按系统屏幕录制按钮，选择 IOSStreamViewer 并开始广播。")
                     }
                     .font(.subheadline)

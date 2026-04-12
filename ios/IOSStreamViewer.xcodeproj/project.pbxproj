@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2ECD37F4DD7CFC2A71714B6B /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 0023E2CF8138D54FF9FA5FB0 /* WebRTC */; };
 		A053E7419E213615E45D1FA7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3510887441D2C1A692423B76 /* ContentView.swift */; };
 		B000BDC324094B1C7D2A7568 /* SharedStreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B23B99ED4466182E7A740E5 /* SharedStreamConfiguration.swift */; };
 		BDF1460A791F19B8FE153136 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC06E2357A43F9C902D3C27A /* SampleHandler.swift */; };
@@ -44,12 +45,23 @@
 		265BD8A8443062E9F2EFA04E /* StreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamConfiguration.swift; sourceTree = "<group>"; };
 		3510887441D2C1A692423B76 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		4AF067BC4FC27BC25474BF30 /* BroadcastPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastPickerButton.swift; sourceTree = "<group>"; };
-		5C619DD5068AA1FE5923689A /* IOSStreamViewer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IOSStreamViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		717A7BFD9E378005EFD51357 /* BroadcastUploadExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BroadcastUploadExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		5C619DD5068AA1FE5923689A /* IOSStreamViewer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IOSStreamViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		717A7BFD9E378005EFD51357 /* BroadcastUploadExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BroadcastUploadExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		8B23B99ED4466182E7A740E5 /* SharedStreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedStreamConfiguration.swift; sourceTree = "<group>"; };
 		CC06E2357A43F9C902D3C27A /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
 		F8342D7852CD915F4660913F /* IOSStreamViewerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSStreamViewerApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		42FC88383C44D46FBD8226EC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2ECD37F4DD7CFC2A71714B6B /* WebRTC in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		01744EDD7F117FE271DF0003 /* Sources */ = {
@@ -119,6 +131,7 @@
 			buildConfigurationList = AB94BFA1146D689809AEC998 /* Build configuration list for PBXNativeTarget "BroadcastUploadExtension" */;
 			buildPhases = (
 				9AD8D55C9268D6DCFDA9C7FF /* Sources */,
+				42FC88383C44D46FBD8226EC /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -126,6 +139,7 @@
 			);
 			name = BroadcastUploadExtension;
 			packageProductDependencies = (
+				0023E2CF8138D54FF9FA5FB0 /* WebRTC */,
 			);
 			productName = BroadcastUploadExtension;
 			productReference = 717A7BFD9E378005EFD51357 /* BroadcastUploadExtension.appex */;
@@ -139,16 +153,6 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
-				TargetAttributes = {
-					04ADE56F9EDD0F0A0D4E5461 = {
-						DevelopmentTeam = 6RM2TN4K2V;
-						ProvisioningStyle = Automatic;
-					};
-					669EAEAEB27C2E816270F2D1 = {
-						DevelopmentTeam = 6RM2TN4K2V;
-						ProvisioningStyle = Automatic;
-					};
-				};
 			};
 			buildConfigurationList = C3CC053A412F33F322B4C775 /* Build configuration list for PBXProject "IOSStreamViewer" */;
 			developmentRegion = en;
@@ -159,6 +163,9 @@
 			);
 			mainGroup = E84BB045511F584E07334043;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				831E0F795311E4D143EEA779 /* XCRemoteSwiftPackageReference "WebRTC" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C16669B0E82A28EB41C9C6A5 /* Products */;
 			projectDirPath = "";
@@ -206,7 +213,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = App/IOSStreamViewer.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = 6RM2TN4K2V;
@@ -227,6 +233,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/IOSStreamViewer.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 6RM2TN4K2V;
 				INFOPLIST_FILE = App/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -274,7 +281,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 6RM2TN4K2V;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -302,7 +309,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = BroadcastUploadExtension/BroadcastUploadExtension.entitlements;
 				DEVELOPMENT_TEAM = 6RM2TN4K2V;
 				INFOPLIST_FILE = BroadcastUploadExtension/Info.plist;
@@ -322,7 +328,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = BroadcastUploadExtension/BroadcastUploadExtension.entitlements;
 				DEVELOPMENT_TEAM = 6RM2TN4K2V;
 				INFOPLIST_FILE = BroadcastUploadExtension/Info.plist;
@@ -373,9 +378,8 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
-				CODE_SIGN_STYLE = Automatic;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 6RM2TN4K2V;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -437,6 +441,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		831E0F795311E4D143EEA779 /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC.git";
+			requirement = {
+				branch = latest;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0023E2CF8138D54FF9FA5FB0 /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 831E0F795311E4D143EEA779 /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 30F5E06654031B9A3A994060 /* Project object */;
 }
