@@ -13,6 +13,7 @@ enum StreamDefaults {
     static let diagnosticsUpdatedAtKey = "stream.diagnostics.updatedAt"
     static let diagnosticsSentFrameCountKey = "stream.diagnostics.sentFrameCount"
     static let diagnosticsLastFrameAtKey = "stream.diagnostics.lastFrameAt"
+    static let diagnosticsRecentEventsKey = "stream.diagnostics.recentEvents"
 
     static var broadcastExtensionBundleIdentifier: String? {
         guard let appBundleIdentifier = Bundle.main.bundleIdentifier else {
@@ -63,13 +64,15 @@ struct StreamDiagnostics {
     var updatedAt: String
     var sentFrameCount: Int
     var lastFrameAt: String
+    var recentEvents: [String]
 
     static let empty = StreamDiagnostics(
         status: "未开始",
         lastError: "",
         updatedAt: "",
         sentFrameCount: 0,
-        lastFrameAt: ""
+        lastFrameAt: "",
+        recentEvents: []
     )
 
     static func load() -> StreamDiagnostics {
@@ -82,7 +85,8 @@ struct StreamDiagnostics {
             lastError: defaults.string(forKey: StreamDefaults.diagnosticsLastErrorKey) ?? empty.lastError,
             updatedAt: defaults.string(forKey: StreamDefaults.diagnosticsUpdatedAtKey) ?? empty.updatedAt,
             sentFrameCount: defaults.integer(forKey: StreamDefaults.diagnosticsSentFrameCountKey),
-            lastFrameAt: defaults.string(forKey: StreamDefaults.diagnosticsLastFrameAtKey) ?? empty.lastFrameAt
+            lastFrameAt: defaults.string(forKey: StreamDefaults.diagnosticsLastFrameAtKey) ?? empty.lastFrameAt,
+            recentEvents: defaults.stringArray(forKey: StreamDefaults.diagnosticsRecentEventsKey) ?? empty.recentEvents
         )
     }
 }

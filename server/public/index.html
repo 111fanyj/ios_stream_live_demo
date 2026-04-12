@@ -181,6 +181,30 @@
         font-size: 14px;
       }
 
+      .debug-log {
+        margin-top: 18px;
+        padding: 14px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(22, 35, 58, 0.04);
+      }
+
+      .debug-log h2 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        color: var(--ink);
+      }
+
+      .debug-log pre {
+        margin: 0;
+        max-height: 220px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--ink);
+      }
+
       .meta strong {
         color: var(--ink);
       }
@@ -250,6 +274,11 @@
             <div>查看人数: <strong id="viewerCount">0</strong></div>
             <div>最新帧: <strong id="lastFrameMeta">暂无</strong></div>
           </div>
+
+          <section class="debug-log">
+            <h2>调试日志</h2>
+            <pre id="debugLog">等待连接...</pre>
+          </section>
         </aside>
 
         <section class="viewer">
@@ -283,6 +312,7 @@
       const viewerTitle = document.getElementById('viewerTitle');
       const statusDot = document.getElementById('statusDot');
       const statusLabel = document.getElementById('statusLabel');
+      const debugLog = document.getElementById('debugLog');
 
       let signalingSocket;
       let peerConnection;
@@ -290,12 +320,35 @@
       let currentPublisherId = null;
       let hasRemoteDescription = false;
       let pendingCandidates = [];
+      let debugLines = [];
 
       function defaultServerUrl() {
         return window.location.origin;
       }
 
       serverUrlInput.value = defaultServerUrl();
+
+      function pushLog(message, payload) {
+        const timestamp = new Date().toLocaleTimeString();
+        let line = `[${timestamp}] ${message}`;
+
+        if (payload !== undefined) {
+          try {
+            line += ` ${JSON.stringify(payload)}`;
+          } catch {
+            line += ` ${String(payload)}`;
+          }
+        }
+
+        debugLines.push(line);
+        if (debugLines.length > 40) {
+          debugLines = debugLines.slice(-40);
+        }
+
+        debugLog.textContent = debugLines.join('\n');
+        debugLog.scrollTop = debugLog.scrollHeight;
+        console.log('[viewer]', message, payload ?? '');
+      }
 
       function setLiveState(isLive) {
         statusDot.classList.toggle('live', isLive);
@@ -319,6 +372,7 @@
         frameView.hidden = true;
         emptyState.hidden = false;
         lastFrameMeta.textContent = '暂无';
+        pushLog('已重置画面显示');
       }
 
       function closePeerConnection() {
@@ -341,6 +395,7 @@
         hasRemoteDescription = false;
         pendingCandidates = [];
         setRTCText('未建立');
+        pushLog('PeerConnection 已关闭');
       }
 
       function closeSocket() {
@@ -348,6 +403,7 @@
           signalingSocket.onclose = null;
           signalingSocket.close();
           signalingSocket = null;
+          pushLog('Signaling WebSocket 已关闭');
         }
       }
 
@@ -359,18 +415,22 @@
 
       function attachFrameChannel(channel) {
         frameChannel = channel;
+        pushLog('收到 DataChannel', { label: channel.label, id: channel.id });
 
         frameChannel.onopen = () => {
           setRTCText('DataChannel 已连接');
           setConnectionText('信令已连接');
+          pushLog('DataChannel 已打开');
         };
 
         frameChannel.onclose = () => {
           setRTCText('DataChannel 已关闭');
+          pushLog('DataChannel 已关闭');
         };
 
-        frameChannel.onerror = () => {
+        frameChannel.onerror = (event) => {
           setRTCText('DataChannel 异常');
+          pushLog('DataChannel 异常', { type: event.type });
         };
 
         frameChannel.onmessage = (event) => {
@@ -388,13 +448,23 @@
           lastFrameMeta.textContent = `${message.width || '?'} x ${message.height || '?'} / ${new Date(message.timestamp).toLocaleTimeString()}`;
           setLiveState(true);
           setPublisherState('已连接');
+          if (message.sequence === 1 || message.sequence % 30 === 0) {
+            pushLog('收到视频帧', {
+              sequence: message.sequence,
+              width: message.width,
+              height: message.height,
+            });
+          }
         };
       }
 
       function sendSignal(targetId, signal) {
         if (!signalingSocket || signalingSocket.readyState !== WebSocket.OPEN) {
+          pushLog('signal 发送失败，WebSocket 未连接', { targetId, signalType: signal.type });
           return;
         }
+
+        pushLog('发送 signal', { targetId, signalType: signal.type });
 
         signalingSocket.send(
           JSON.stringify({
@@ -427,6 +497,7 @@
 
       function ensurePeerConnection(publisherId) {
         if (peerConnection && currentPublisherId === publisherId) {
+          pushLog('复用已有 PeerConnection', { publisherId });
           return peerConnection;
         }
 
@@ -434,6 +505,7 @@
         closePeerConnection();
         pendingCandidates = preservedCandidates;
         currentPublisherId = publisherId;
+        pushLog('创建新的 PeerConnection', { publisherId });
 
         peerConnection = new RTCPeerConnection({
           iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
@@ -443,6 +515,8 @@
           if (!event.candidate || !currentPublisherId) {
             return;
           }
+
+          pushLog('生成本地 ICE candidate', { publisherId: currentPublisherId });
 
           sendSignal(currentPublisherId, {
             type: 'candidate',
@@ -466,6 +540,7 @@
           };
 
           setRTCText(labelMap[state] || state);
+          pushLog('PeerConnection 状态变化', { state });
 
           if (state === 'failed' || state === 'disconnected' || state === 'closed') {
             setLiveState(false);
@@ -480,6 +555,10 @@
           return;
         }
 
+        if (pendingCandidates.length > 0) {
+          pushLog('开始补发缓存 ICE candidate', { count: pendingCandidates.length });
+        }
+
         while (pendingCandidates.length > 0) {
           const candidate = pendingCandidates.shift();
           await peerConnection.addIceCandidate(candidate);
@@ -487,6 +566,8 @@
       }
 
       connectButton.addEventListener('click', () => {
+        debugLines = [];
+        pushLog('开始连接查看端');
         closeConnection();
         resetFrameView();
         setLiveState(false);
@@ -497,6 +578,7 @@
         const roomId = roomIdInput.value.trim() || 'demo-room';
         const token = tokenInput.value.trim();
         const url = buildSignalUrl(baseUrl, roomId, token);
+        pushLog('准备连接信令服务', { url: url.toString(), roomId, hasToken: Boolean(token) });
 
         viewerTitle.textContent = `房间 ${roomId}`;
         setConnectionText('信令连接中');
@@ -504,10 +586,17 @@
 
         signalingSocket.onopen = () => {
           setConnectionText('信令已连接');
+          pushLog('Signaling WebSocket 已打开');
         };
 
         signalingSocket.onmessage = async (event) => {
           const message = JSON.parse(event.data);
+          pushLog('收到服务端消息', {
+            type: message.type,
+            signalType: message.signal?.type,
+            sourceId: message.sourceId,
+            publisherId: message.publisherId,
+          });
 
           if (message.type === 'room_state') {
             setPublisherState(message.hasPublisher ? '已连接' : '未检测到');
@@ -527,6 +616,7 @@
             viewerCount.textContent = String(message.viewerCount || 0);
             currentPublisherId = message.publisherId || null;
             setRTCText(message.hasPublisher ? '等待 offer' : '等待发布端');
+            pushLog('查看端已注册', { hasPublisher: message.hasPublisher, publisherId: message.publisherId });
             return;
           }
 
@@ -534,12 +624,14 @@
             currentPublisherId = message.sourceId;
 
             if (message.signal.type === 'offer') {
+              pushLog('收到 offer', { sourceId: message.sourceId, sdpLength: message.signal.sdp?.length || 0 });
               const connection = ensurePeerConnection(message.sourceId);
               await connection.setRemoteDescription({
                 type: 'offer',
                 sdp: message.signal.sdp,
               });
               hasRemoteDescription = true;
+              pushLog('已设置远端 offer');
               await flushPendingCandidates();
 
               const answer = await connection.createAnswer();
@@ -549,14 +641,17 @@
                 sdp: answer.sdp,
               });
               setRTCText('已发送 answer');
+              pushLog('已创建并发送 answer', { sdpLength: answer.sdp?.length || 0 });
             }
 
             if (message.signal.type === 'candidate') {
               const candidate = new RTCIceCandidate(message.signal.candidate);
               if (peerConnection && hasRemoteDescription) {
                 await peerConnection.addIceCandidate(candidate);
+                pushLog('已添加远端 ICE candidate');
               } else {
                 pendingCandidates.push(candidate);
+                pushLog('远端 ICE candidate 已缓存', { pending: pendingCandidates.length });
               }
             }
 
@@ -568,16 +663,19 @@
             currentPublisherId = null;
             setPublisherState('未检测到');
             setLiveState(false);
+            pushLog('发布端已离开');
             return;
           }
 
           if (message.type === 'error') {
             setConnectionText(`错误: ${message.message}`);
+            pushLog('服务端返回错误', { message: message.message });
           }
         };
 
-        signalingSocket.onerror = () => {
+        signalingSocket.onerror = (event) => {
           setConnectionText('信令异常');
+          pushLog('Signaling WebSocket 异常', { type: event.type });
         };
 
         signalingSocket.onclose = () => {
@@ -585,6 +683,7 @@
           setConnectionText('已断开');
           setPublisherState('未检测到');
           setLiveState(false);
+          pushLog('Signaling WebSocket 已断开');
         };
       });
     </script>

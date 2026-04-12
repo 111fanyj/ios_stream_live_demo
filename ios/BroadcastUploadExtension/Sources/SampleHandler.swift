@@ -24,8 +24,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private let logger = Logger(subsystem: "IOSStreamViewer", category: "BroadcastUploadExtension")
     private var webSocketSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
+    private var pingTimer: DispatchSourceTimer?
+    private let pingQueue = DispatchQueue(label: "IOSStreamViewer.BroadcastUploadExtension.WebSocketPing")
     private var sequenceNumber = 0
     private var lastSentAt = Date.distantPast
+    private var lastNoViewerLogAt = Date.distantPast
     private let minimumSendInterval: TimeInterval = 0.12
     private let isoFormatter = ISO8601DateFormatter()
     private lazy var peerConnectionFactory: RTCPeerConnectionFactory = {
@@ -40,31 +43,34 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private var dataChannelToViewerID: [ObjectIdentifier: String] = [:]
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
+        clearRecentEvents()
         updateDiagnostics(status: "广播启动中")
+        logEvent("广播扩展启动")
         resetPeerConnections()
 
         guard let configuration = loadConfiguration() else {
             let error = NSError(domain: "IOSStreamViewer", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法读取共享配置，请先在主 App 中保存服务端地址"])
             updateDiagnostics(status: "配置读取失败", error: error.localizedDescription)
+            logEvent("配置读取失败: \(error.localizedDescription)")
             finishBroadcastWithError(error)
             return
         }
 
+        logEvent("读取配置 server=\(configuration.serverURL) room=\(configuration.roomID) token=\(configuration.token.isEmpty ? "<empty>" : "<set>")")
+
         guard let url = buildPublisherURL(configuration: configuration) else {
             let error = NSError(domain: "IOSStreamViewer", code: -2, userInfo: [NSLocalizedDescriptionKey: "服务端地址无效"])
             updateDiagnostics(status: "服务端地址无效", error: error.localizedDescription)
+            logEvent("服务端地址无效: \(configuration.serverURL)")
             finishBroadcastWithError(error)
             return
         }
 
         logger.log("Broadcast started, connecting to \(url.absoluteString, privacy: .public)")
         updateDiagnostics(status: "正在连接 \(url.host ?? configuration.serverURL)")
+        logEvent("准备连接 WebSocket: \(url.absoluteString)")
 
-        let sessionConfiguration = URLSessionConfiguration.default
-        sessionConfiguration.timeoutIntervalForRequest = 15
-        sessionConfiguration.timeoutIntervalForResource = 15
-
-        let session = URLSession(configuration: sessionConfiguration, delegate: self, delegateQueue: nil)
+        let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         webSocketSession = session
         let task = session.webSocketTask(with: url)
         task.resume()
@@ -80,6 +86,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
     override func broadcastFinished() {
         updateDiagnostics(status: "广播结束")
+        logEvent("广播结束")
+        stopWebSocketPingLoop()
         resetPeerConnections()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
@@ -105,10 +113,17 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         let deliveredViewerCount = deliverFramePayload(payload)
         guard deliveredViewerCount > 0 else {
+            if now.timeIntervalSince(lastNoViewerLogAt) >= 5 {
+                lastNoViewerLogAt = now
+                logEvent("视频帧已编码，但当前没有可用查看端 DataChannel")
+            }
             return
         }
 
         lastSentAt = now
+        if sequenceNumber == 1 || sequenceNumber % 30 == 0 {
+            logEvent("已发送第 \(sequenceNumber) 帧，送达 \(deliveredViewerCount) 个查看端")
+        }
         updateDiagnostics(
             status: "推流中（WebRTC）",
             sentFrameCount: sequenceNumber,
@@ -209,6 +224,10 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             viewerPeer.peerConnection.close()
         }
 
+        if !viewerPeers.isEmpty {
+            logEvent("重置 \(viewerPeers.count) 个查看端连接")
+        }
+
         viewerPeers.removeAll()
         peerConnectionToViewerID.removeAll()
         dataChannelToViewerID.removeAll()
@@ -216,8 +235,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
     private func startPeerConnection(for viewerID: String) {
         guard viewerPeers[viewerID] == nil else {
+            logEvent("查看端 \(viewerID) 已存在，跳过重复建连")
             return
         }
+
+        logEvent("开始为查看端 \(viewerID) 创建 PeerConnection")
 
         let configuration = RTCConfiguration()
         configuration.sdpSemantics = .unifiedPlan
@@ -233,6 +255,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             delegate: self
         ) else {
             logger.error("Failed to create peer connection for \(viewerID, privacy: .public)")
+            logEvent("创建 PeerConnection 失败: \(viewerID)")
             return
         }
 
@@ -241,6 +264,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         guard let dataChannel = peerConnection.dataChannel(forLabel: "frames", configuration: dataChannelConfiguration) else {
             logger.error("Failed to create data channel for \(viewerID, privacy: .public)")
+            logEvent("创建 DataChannel 失败: \(viewerID)")
             return
         }
 
@@ -271,12 +295,14 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
             if let error {
                 self.logger.error("Failed to create offer for \(viewerID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                self.logEvent("创建 offer 失败: \(viewerID) \(error.localizedDescription)")
                 self.closePeerConnection(for: viewerID)
                 return
             }
 
             guard let sessionDescription else {
                 self.logger.error("Offer is missing for \(viewerID, privacy: .public)")
+                self.logEvent("offer 为空: \(viewerID)")
                 self.closePeerConnection(for: viewerID)
                 return
             }
@@ -288,9 +314,12 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
                 if let error {
                     self.logger.error("Failed to set local description for \(viewerID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    self.logEvent("设置本地 offer 失败: \(viewerID) \(error.localizedDescription)")
                     self.closePeerConnection(for: viewerID)
                     return
                 }
+
+                self.logEvent("本地 offer 已生成并准备发送: \(viewerID)")
 
                 self.sendSignal(
                     to: viewerID,
@@ -308,6 +337,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
+        logEvent("关闭查看端连接: \(viewerID)")
+
         peerConnectionToViewerID.removeValue(forKey: ObjectIdentifier(viewerPeer.peerConnection))
         dataChannelToViewerID.removeValue(forKey: ObjectIdentifier(viewerPeer.dataChannel))
         viewerPeer.peerConnection.close()
@@ -320,11 +351,13 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         switch type {
         case "answer":
+            logEvent("收到 answer: \(viewerID)")
             applyAnswer(signal, from: viewerID)
         case "candidate":
             applyRemoteCandidate(signal, from: viewerID)
         default:
             logger.warning("Unsupported signal type from viewer \(viewerID, privacy: .public): \(type, privacy: .public)")
+            logEvent("收到未知 signal: \(type) from \(viewerID)")
         }
     }
 
@@ -343,6 +376,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
             if let error {
                 self.logger.error("Failed to set remote answer for \(viewerID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                self.logEvent("设置远端 answer 失败: \(viewerID) \(error.localizedDescription)")
                 self.closePeerConnection(for: viewerID)
                 return
             }
@@ -354,6 +388,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 viewerPeer.peerConnection.add(candidate)
             }
 
+            self.logEvent("远端 answer 已应用: \(viewerID)，补发 \(pendingCandidates.count) 个候选")
             self.updateDiagnostics(status: "WebRTC 已连接查看端")
         }
     }
@@ -380,8 +415,10 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         if viewerPeer.hasRemoteDescription {
             viewerPeer.peerConnection.add(candidate)
+            logEvent("远端 candidate 已添加: \(viewerID)")
         } else {
             viewerPeer.pendingCandidates.append(candidate)
+            logEvent("远端 candidate 已缓存: \(viewerID)")
         }
     }
 
@@ -393,15 +430,76 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                   "signal": signal
               ])
         else {
+            logEvent("信令发送前置条件不满足，目标 \(targetID)")
             return
+        }
+
+        if let signalType = signal["type"] as? String {
+            logEvent("发送 signal \(signalType) -> \(targetID)")
         }
 
         task.send(.string(payload)) { [weak self] error in
             if let error {
                 self?.logger.error("Failed to send signal to \(targetID, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 self?.updateDiagnostics(status: "信令发送失败", error: error.localizedDescription)
+                self?.logEvent("发送 signal 失败 -> \(targetID): \(error.localizedDescription)")
             }
         }
+    }
+
+    private func startWebSocketPingLoop(for task: URLSessionWebSocketTask) {
+        stopWebSocketPingLoop()
+
+        let timer = DispatchSource.makeTimerSource(queue: pingQueue)
+        timer.schedule(deadline: .now() + 15, repeating: 15)
+        timer.setEventHandler { [weak self, weak task] in
+            guard let self, let task else {
+                return
+            }
+
+            task.sendPing { [weak self] error in
+                guard let self, let error else {
+                    return
+                }
+
+                self.logger.error("WebSocket ping failed: \(error.localizedDescription, privacy: .public)")
+                self.logEvent("WebSocket ping 失败: \(error.localizedDescription)")
+            }
+        }
+        pingTimer = timer
+        timer.resume()
+        logEvent("已启动 WebSocket 保活 ping")
+    }
+
+    private func stopWebSocketPingLoop() {
+        pingTimer?.setEventHandler {}
+        pingTimer?.cancel()
+        pingTimer = nil
+    }
+
+    private func clearRecentEvents() {
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return
+        }
+
+        defaults.set([], forKey: StreamDefaults.diagnosticsRecentEventsKey)
+    }
+
+    private func logEvent(_ message: String) {
+        logger.log("[diagnostics] \(message, privacy: .public)")
+
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return
+        }
+
+        let timestamp = isoFormatter.string(from: Date())
+        var events = defaults.stringArray(forKey: StreamDefaults.diagnosticsRecentEventsKey) ?? []
+        events.append("[\(timestamp)] \(message)")
+        if events.count > 25 {
+            events.removeFirst(events.count - 25)
+        }
+        defaults.set(events, forKey: StreamDefaults.diagnosticsRecentEventsKey)
+        defaults.set(timestamp, forKey: StreamDefaults.diagnosticsUpdatedAtKey)
     }
 
     private func makeJSONString(from object: [String: Any]) -> String? {
@@ -436,6 +534,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             case .failure(let error):
                 self?.logger.error("Receive loop failed: \(error.localizedDescription, privacy: .public)")
                 self?.updateDiagnostics(status: "连接中断", error: error.localizedDescription)
+                self?.stopWebSocketPingLoop()
+                self?.logEvent("接收循环失败: \(error.localizedDescription)")
                 self?.finishBroadcastWithError(error)
             }
         }
@@ -454,6 +554,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         case "publisher_ready":
             updateDiagnostics(status: "已连接到 WebRTC 信令服务")
             logger.log("Publisher is ready for WebRTC signaling")
+            let viewerCount = (json["viewerIds"] as? [String])?.count ?? (json["viewerIds"] as? [Any])?.count ?? 0
+            logEvent("服务端确认 publisher_ready，当前查看端 \(viewerCount) 个")
 
             if let viewerIDs = json["viewerIds"] as? [String] {
                 for viewerID in viewerIDs {
@@ -469,12 +571,14 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 return
             }
             logger.log("Viewer joined: \(viewerID, privacy: .public)")
+            logEvent("查看端加入: \(viewerID)")
             startPeerConnection(for: viewerID)
         case "viewer_left":
             guard let viewerID = json["viewerId"] as? String else {
                 return
             }
             logger.log("Viewer left: \(viewerID, privacy: .public)")
+            logEvent("查看端离开: \(viewerID)")
             closePeerConnection(for: viewerID)
         case "signal":
             guard let viewerID = json["sourceId"] as? String,
@@ -482,9 +586,12 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             else {
                 return
             }
+            logEvent("收到服务端转发的 signal \((signal["type"] as? String) ?? "unknown") from \(viewerID)")
             receiveSignal(from: viewerID, signal: signal)
         case "room_state":
             let viewerCount = json["viewerCount"] as? Int ?? 0
+            let hasPublisher = json["hasPublisher"] as? Bool ?? true
+            logEvent("房间状态: hasPublisher=\(hasPublisher) viewers=\(viewerCount)")
             if viewerCount == 0 {
                 updateDiagnostics(status: "已连接信令服务，等待查看端")
             }
@@ -492,13 +599,17 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             let warning = json["message"] as? String ?? "未知警告"
             updateDiagnostics(status: "服务端警告", error: warning)
             logger.warning("Server warning: \(warning, privacy: .public)")
+            logEvent("服务端警告: \(warning)")
         case "error":
             let errorMessage = json["message"] as? String ?? "未知错误"
             updateDiagnostics(status: "服务端返回错误", error: errorMessage)
             logger.error("Server error: \(errorMessage, privacy: .public)")
+            logEvent("服务端错误: \(errorMessage)")
         case "publisher_left":
             updateDiagnostics(status: "发布端已断开")
+            logEvent("服务端通知发布端已断开")
         default:
+            logEvent("收到未处理消息类型: \(type)")
             break
         }
     }
@@ -527,17 +638,26 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         logger.log("WebSocket opened")
         updateDiagnostics(status: "WebRTC 信令已打开")
+        startWebSocketPingLoop(for: webSocketTask)
+        logEvent("WebSocket 已打开")
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonText = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
         logger.log("WebSocket closed with code \(closeCode.rawValue), reason: \(reasonText, privacy: .public)")
         updateDiagnostics(status: "WebSocket 已关闭", error: reasonText)
+        stopWebSocketPingLoop()
+        logEvent("WebSocket 已关闭 code=\(closeCode.rawValue) reason=\(reasonText.isEmpty ? "<empty>" : reasonText)")
     }
 }
 
 extension SampleHandler: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
+        guard let viewerID = peerConnectionToViewerID[ObjectIdentifier(peerConnection)] else {
+            return
+        }
+
+        logEvent("SignalingState 变更: \(viewerID) -> \(String(describing: stateChanged))")
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
@@ -554,6 +674,8 @@ extension SampleHandler: RTCPeerConnectionDelegate {
             return
         }
 
+        logEvent("ICE 连接状态: \(viewerID) -> \(String(describing: newState))")
+
         switch newState {
         case .failed, .closed, .disconnected:
             logger.warning("ICE connection ended for \(viewerID, privacy: .public) with state \(String(describing: newState), privacy: .public)")
@@ -564,12 +686,19 @@ extension SampleHandler: RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+        guard let viewerID = peerConnectionToViewerID[ObjectIdentifier(peerConnection)] else {
+            return
+        }
+
+        logEvent("ICE 收集状态: \(viewerID) -> \(String(describing: newState))")
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         guard let viewerID = peerConnectionToViewerID[ObjectIdentifier(peerConnection)] else {
             return
         }
+
+        logEvent("生成本地 candidate: \(viewerID)")
 
         sendSignal(
             to: viewerID,
@@ -587,6 +716,7 @@ extension SampleHandler: RTCPeerConnectionDelegate {
         dataChannel.delegate = self
         if let viewerID = peerConnectionToViewerID[ObjectIdentifier(peerConnection)] {
             dataChannelToViewerID[ObjectIdentifier(dataChannel)] = viewerID
+            logEvent("PeerConnection 打开远端 DataChannel: \(viewerID)")
         }
     }
 }
@@ -601,10 +731,13 @@ extension SampleHandler: RTCDataChannelDelegate {
         case .open:
             logger.log("Data channel opened for \(viewerID, privacy: .public)")
             updateDiagnostics(status: "WebRTC 数据通道已连接")
+            logEvent("DataChannel 已打开: \(viewerID)")
         case .closed:
             logger.log("Data channel closed for \(viewerID, privacy: .public)")
+            logEvent("DataChannel 已关闭: \(viewerID)")
             closePeerConnection(for: viewerID)
         default:
+            logEvent("DataChannel 状态变化: \(viewerID) -> \(String(describing: dataChannel.readyState))")
             break
         }
     }

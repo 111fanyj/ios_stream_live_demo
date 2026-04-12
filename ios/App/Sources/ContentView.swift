@@ -5,6 +5,7 @@ import UIKit
 struct ContentView: View {
     @State private var configuration = StreamConfiguration.load()
     @State private var diagnostics = StreamDiagnostics.load()
+    @State private var signalProbe = SignalProbe()
     @State private var isSaved = false
     @State private var connectionTestResult = "未测试"
     @State private var isTestingConnection = false
@@ -87,6 +88,47 @@ struct ContentView: View {
                         .buttonStyle(.bordered)
                     }
 
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("主动信令诊断")
+                            .font(.headline)
+
+                        Text("这个按钮直接从主 App 发起 probe WebSocket 连接，不依赖屏幕广播扩展，也不会参与实际 WebRTC 推流。")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+
+                        Text("连接状态: \(signalProbe.state.rawValue)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        HStack {
+                            Button(signalProbe.isConnectedOrConnecting ? "断开主动连接" : "主动连接信令服务") {
+                                if signalProbe.isConnectedOrConnecting {
+                                    signalProbe.disconnect(reason: "用户手动断开")
+                                } else {
+                                    signalProbe.connect(configuration: configuration)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Button("清空主动诊断日志") {
+                                signalProbe.clearLogs()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 6) {
+                                ForEach(Array(signalProbe.logs.enumerated()), id: \.offset) { _, logLine in
+                                    Text(logLine)
+                                        .font(.caption)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                        .frame(minHeight: 120, maxHeight: 220)
+                    }
+
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Text("扩展诊断")
@@ -105,6 +147,20 @@ struct ContentView: View {
                         Text("已发送帧数: \(diagnostics.sentFrameCount)")
                         Text("最后一帧时间: \(diagnostics.lastFrameAt.isEmpty ? "暂无" : diagnostics.lastFrameAt)")
                         Text("最后错误: \(diagnostics.lastError.isEmpty ? "无" : diagnostics.lastError)")
+
+                        if diagnostics.recentEvents.isEmpty {
+                            Text("最近事件: 暂无")
+                        } else {
+                            Text("最近事件")
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+
+                            ForEach(Array(diagnostics.recentEvents.enumerated()), id: \.offset) { _, event in
+                                Text(event)
+                                    .font(.caption)
+                                    .textSelection(.enabled)
+                            }
+                        }
                     }
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

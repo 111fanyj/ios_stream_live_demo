@@ -15,11 +15,34 @@ function log(...parts) {
   console.log(new Date().toISOString(), ...parts);
 }
 
+function summarizeSignal(signal) {
+  if (!signal || typeof signal !== 'object') {
+    return { type: 'unknown' };
+  }
+
+  if (signal.type === 'candidate') {
+    return {
+      type: 'candidate',
+      hasCandidate: Boolean(signal.candidate?.candidate)
+    };
+  }
+
+  if (signal.type === 'offer' || signal.type === 'answer') {
+    return {
+      type: signal.type,
+      sdpLength: typeof signal.sdp === 'string' ? signal.sdp.length : 0
+    };
+  }
+
+  return { type: signal.type ?? 'unknown' };
+}
+
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     rooms.set(roomId, {
       publisher: null,
       viewers: new Map(),
+      probes: new Map(),
       publisherConnectedAt: null
     });
   }
@@ -35,6 +58,10 @@ function makeClientId() {
 
 function getViewerIds(room) {
   return Array.from(room.viewers.keys());
+}
+
+function getProbeIds(room) {
+  return Array.from(room.probes.keys());
 }
 
 function getClientById(room, clientId) {
@@ -57,13 +84,30 @@ function broadcastRoomState(roomId) {
     hasPublisher: Boolean(room.publisher),
     publisherId: room.publisher?.clientId ?? null,
     viewerCount: room.viewers.size,
+    probeCount: room.probes.size,
     publisherConnectedAt: room.publisherConnectedAt,
     transport: 'webrtc-datachannel'
+  });
+
+  log('room_state_broadcast', {
+    roomId,
+    hasPublisher: Boolean(room.publisher),
+    publisherId: room.publisher?.clientId ?? null,
+    viewerCount: room.viewers.size,
+    viewerIds: getViewerIds(room),
+    probeCount: room.probes.size,
+    probeIds: getProbeIds(room)
   });
 
   for (const viewer of room.viewers.values()) {
     if (viewer.readyState === WebSocket.OPEN) {
       viewer.send(payload);
+    }
+  }
+
+  for (const probe of room.probes.values()) {
+    if (probe.readyState === WebSocket.OPEN) {
+      probe.send(payload);
     }
   }
 
@@ -85,6 +129,7 @@ app.get('/health', (_req, res) => {
     roomId,
     hasPublisher: Boolean(room.publisher),
     viewerCount: room.viewers.size,
+    probeCount: room.probes.size,
     publisherConnectedAt: room.publisherConnectedAt,
     transport: 'webrtc-datachannel'
   }));
@@ -99,13 +144,24 @@ wss.on('connection', (ws, req) => {
   const expectedToken = process.env.STREAM_TOKEN;
   const incomingToken = url.searchParams.get('token');
 
-  if (!clientType || !['publisher', 'viewer'].includes(clientType)) {
+  log('ws_connection_attempt', {
+    path: url.pathname,
+    search: url.search,
+    clientType,
+    roomId,
+    ip: req.socket.remoteAddress,
+    userAgent: req.headers['user-agent'] ?? 'unknown'
+  });
+
+  if (!clientType || !['publisher', 'viewer', 'probe'].includes(clientType)) {
+    log('client_rejected', { reason: 'invalid_client_type', clientType, roomId });
     safeSend(ws, { type: 'error', message: 'Missing or invalid client type' });
     ws.close();
     return;
   }
 
   if (expectedToken && incomingToken !== expectedToken) {
+    log('client_rejected', { reason: 'invalid_token', clientType, roomId });
     safeSend(ws, { type: 'error', message: 'Invalid token' });
     ws.close();
     return;
@@ -143,7 +199,7 @@ wss.on('connection', (ws, req) => {
     }
 
     broadcastRoomState(roomId);
-  } else {
+  } else if (clientType === 'viewer') {
     room.viewers.set(ws.clientId, ws);
     safeSend(ws, {
       type: 'viewer_ready',
@@ -163,32 +219,109 @@ wss.on('connection', (ws, req) => {
     }
 
     broadcastRoomState(roomId);
+  } else {
+    room.probes.set(ws.clientId, ws);
+    safeSend(ws, {
+      type: 'probe_ready',
+      clientId: ws.clientId,
+      roomId,
+      hasPublisher: Boolean(room.publisher),
+      publisherId: room.publisher?.clientId ?? null,
+      viewerCount: room.viewers.size,
+      probeCount: room.probes.size,
+      transport: 'webrtc-datachannel'
+    });
+
+    broadcastRoomState(roomId);
   }
 
   ws.on('message', (rawMessage) => {
+    if (ws.clientType === 'probe') {
+      log('probe_message_ignored', {
+        roomId: ws.roomId,
+        clientId: ws.clientId,
+        size: rawMessage.length ?? rawMessage.toString().length
+      });
+      safeSend(ws, { type: 'warning', message: 'Probe clients do not participate in signaling' });
+      return;
+    }
+
+    log('message_received', {
+      clientType: ws.clientType,
+      roomId: ws.roomId,
+      clientId: ws.clientId,
+      size: rawMessage.length ?? rawMessage.toString().length
+    });
+
     let message;
     try {
       message = JSON.parse(rawMessage.toString());
     } catch (_error) {
+      log('message_rejected', {
+        clientType: ws.clientType,
+        roomId: ws.roomId,
+        clientId: ws.clientId,
+        reason: 'invalid_json'
+      });
       safeSend(ws, { type: 'error', message: 'Invalid JSON payload' });
       return;
     }
 
+    log('message_parsed', {
+      clientType: ws.clientType,
+      roomId: ws.roomId,
+      clientId: ws.clientId,
+      type: message.type,
+      targetId: message.targetId ?? null,
+      signal: summarizeSignal(message.signal)
+    });
+
     if (message.type !== 'signal' || !message.targetId || !message.signal) {
+      log('message_rejected', {
+        clientType: ws.clientType,
+        roomId: ws.roomId,
+        clientId: ws.clientId,
+        reason: 'unsupported_message_format',
+        type: message.type
+      });
       safeSend(ws, { type: 'error', message: 'Unsupported message format' });
       return;
     }
 
     const targetClient = getClientById(room, message.targetId);
     if (!targetClient) {
+      log('message_rejected', {
+        clientType: ws.clientType,
+        roomId: ws.roomId,
+        clientId: ws.clientId,
+        reason: 'target_unavailable',
+        targetId: message.targetId
+      });
       safeSend(ws, { type: 'error', message: 'Target client is unavailable' });
       return;
     }
 
     if (targetClient.clientType === ws.clientType) {
+      log('message_rejected', {
+        clientType: ws.clientType,
+        roomId: ws.roomId,
+        clientId: ws.clientId,
+        reason: 'same_client_type',
+        targetId: message.targetId,
+        signal: summarizeSignal(message.signal)
+      });
       safeSend(ws, { type: 'error', message: 'Signals must be sent to the opposite client type' });
       return;
     }
+
+    log('signal_relaying', {
+      roomId,
+      sourceId: ws.clientId,
+      sourceType: ws.clientType,
+      targetId: message.targetId,
+      targetType: targetClient.clientType,
+      signal: summarizeSignal(message.signal)
+    });
 
     safeSend(targetClient, {
       type: 'signal',
@@ -250,7 +383,11 @@ wss.on('connection', (ws, req) => {
       }
     }
 
-    if (!currentRoom.publisher && currentRoom.viewers.size === 0) {
+    if (ws.clientType === 'probe') {
+      currentRoom.probes.delete(ws.clientId);
+    }
+
+    if (!currentRoom.publisher && currentRoom.viewers.size === 0 && currentRoom.probes.size === 0) {
       log('room_removed', { roomId: ws.roomId });
       rooms.delete(ws.roomId);
       return;
@@ -261,7 +398,8 @@ wss.on('connection', (ws, req) => {
       roomId: ws.roomId,
       clientId: ws.clientId,
       hasPublisher: Boolean(currentRoom.publisher),
-      viewers: currentRoom.viewers.size
+      viewers: currentRoom.viewers.size,
+      probes: currentRoom.probes.size
     });
 
     broadcastRoomState(ws.roomId);

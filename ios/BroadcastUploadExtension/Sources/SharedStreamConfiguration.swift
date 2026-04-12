@@ -10,6 +10,7 @@ enum StreamDefaults {
     static let diagnosticsUpdatedAtKey = "stream.diagnostics.updatedAt"
     static let diagnosticsSentFrameCountKey = "stream.diagnostics.sentFrameCount"
     static let diagnosticsLastFrameAtKey = "stream.diagnostics.lastFrameAt"
+    static let diagnosticsRecentEventsKey = "stream.diagnostics.recentEvents"
 }
 
 struct StreamConfiguration {
