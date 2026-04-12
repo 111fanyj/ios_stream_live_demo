@@ -209,7 +209,7 @@
         color: var(--ink);
       }
 
-      img {
+      video {
         width: 100%;
         max-height: calc(70vh - 90px);
         object-fit: contain;
@@ -247,7 +247,7 @@
       <section class="hero">
         <h1>iPhone 当前屏幕实时查看</h1>
         <p>
-          这个页面作为查看端。iOS App 启动屏幕广播后，Broadcast Extension 会通过 WebRTC DataChannel 把 JPEG 帧发送到浏览器，这里实时展示最新画面。
+          这个页面作为查看端。iOS App 启动屏幕广播后，Broadcast Extension 会通过 WebRTC 视频轨道把实时画面直接发送到浏览器，这里直接播放远端视频流。
         </p>
       </section>
 
@@ -272,7 +272,7 @@
             <div>发布端状态: <strong id="publisherState">未检测到</strong></div>
             <div>WebRTC 状态: <strong id="rtcState">未建立</strong></div>
             <div>查看人数: <strong id="viewerCount">0</strong></div>
-            <div>最新帧: <strong id="lastFrameMeta">暂无</strong></div>
+            <div>视频信息: <strong id="lastFrameMeta">暂无</strong></div>
           </div>
 
           <section class="debug-log">
@@ -291,7 +291,7 @@
               <strong>还没有收到画面</strong>
               <span>先在 iOS 端保存服务端地址，再从控制中心启动屏幕广播。</span>
             </div>
-            <img id="frameView" hidden alt="Live screen frame" />
+            <video id="videoView" hidden autoplay playsinline muted></video>
           </div>
         </section>
       </section>
@@ -307,7 +307,7 @@
       const rtcState = document.getElementById('rtcState');
       const viewerCount = document.getElementById('viewerCount');
       const lastFrameMeta = document.getElementById('lastFrameMeta');
-      const frameView = document.getElementById('frameView');
+      const videoView = document.getElementById('videoView');
       const emptyState = document.getElementById('emptyState');
       const viewerTitle = document.getElementById('viewerTitle');
       const statusDot = document.getElementById('statusDot');
@@ -316,7 +316,6 @@
 
       let signalingSocket;
       let peerConnection;
-      let frameChannel;
       let currentPublisherId = null;
       let hasRemoteDescription = false;
       let pendingCandidates = [];
@@ -327,6 +326,37 @@
       }
 
       serverUrlInput.value = defaultServerUrl();
+
+      async function attemptVideoPlayback(reason) {
+        try {
+          await videoView.play();
+        } catch (error) {
+          pushLog('video.play 失败', { reason, message: error.message });
+        }
+      }
+
+      function updateVideoMeta() {
+        const width = videoView.videoWidth || '?';
+        const height = videoView.videoHeight || '?';
+        lastFrameMeta.textContent = `${width} x ${height} / ${new Date().toLocaleTimeString()}`;
+      }
+
+      videoView.addEventListener('loadedmetadata', () => {
+        updateVideoMeta();
+        pushLog('视频元数据已加载', { width: videoView.videoWidth, height: videoView.videoHeight });
+        attemptVideoPlayback('loadedmetadata');
+      });
+
+      videoView.addEventListener('resize', () => {
+        updateVideoMeta();
+        pushLog('远端视频尺寸变化', { width: videoView.videoWidth, height: videoView.videoHeight });
+      });
+
+      videoView.addEventListener('playing', () => {
+        setLiveState(true);
+        updateVideoMeta();
+        pushLog('远端视频开始播放');
+      });
 
       function pushLog(message, payload) {
         const timestamp = new Date().toLocaleTimeString();
@@ -368,26 +398,20 @@
       }
 
       function resetFrameView() {
-        frameView.removeAttribute('src');
-        frameView.hidden = true;
+        videoView.pause();
+        videoView.removeAttribute('src');
+        videoView.srcObject = null;
+        videoView.hidden = true;
         emptyState.hidden = false;
         lastFrameMeta.textContent = '暂无';
         pushLog('已重置画面显示');
       }
 
       function closePeerConnection() {
-        if (frameChannel) {
-          frameChannel.onopen = null;
-          frameChannel.onclose = null;
-          frameChannel.onerror = null;
-          frameChannel.onmessage = null;
-          frameChannel = null;
-        }
-
         if (peerConnection) {
           peerConnection.onicecandidate = null;
           peerConnection.onconnectionstatechange = null;
-          peerConnection.ondatachannel = null;
+          peerConnection.ontrack = null;
           peerConnection.close();
           peerConnection = null;
         }
@@ -395,6 +419,7 @@
         hasRemoteDescription = false;
         pendingCandidates = [];
         setRTCText('未建立');
+        resetFrameView();
         pushLog('PeerConnection 已关闭');
       }
 
@@ -413,49 +438,36 @@
         currentPublisherId = null;
       }
 
-      function attachFrameChannel(channel) {
-        frameChannel = channel;
-        pushLog('收到 DataChannel', { label: channel.label, id: channel.id });
+      function attachRemoteTrack(track, streams) {
+        const remoteStream = streams[0] || new MediaStream([track]);
+        videoView.srcObject = remoteStream;
+        videoView.hidden = false;
+        emptyState.hidden = true;
+        setPublisherState('已连接');
+        setRTCText('视频轨道已连接');
+        pushLog('收到远端视频轨道', {
+          trackId: track.id,
+          kind: track.kind,
+          streamId: remoteStream.id,
+        });
 
-        frameChannel.onopen = () => {
-          setRTCText('DataChannel 已连接');
-          setConnectionText('信令已连接');
-          pushLog('DataChannel 已打开');
-        };
-
-        frameChannel.onclose = () => {
-          setRTCText('DataChannel 已关闭');
-          pushLog('DataChannel 已关闭');
-        };
-
-        frameChannel.onerror = (event) => {
-          setRTCText('DataChannel 异常');
-          pushLog('DataChannel 异常', { type: event.type });
-        };
-
-        frameChannel.onmessage = (event) => {
-          const text = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
-          const message = JSON.parse(text);
-
-          if (message.type !== 'frame') {
-            return;
-          }
-
-          const dataUrl = `data:${message.mimeType};base64,${message.imageData}`;
-          frameView.src = dataUrl;
-          frameView.hidden = false;
-          emptyState.hidden = true;
-          lastFrameMeta.textContent = `${message.width || '?'} x ${message.height || '?'} / ${new Date(message.timestamp).toLocaleTimeString()}`;
+        track.onunmute = () => {
           setLiveState(true);
-          setPublisherState('已连接');
-          if (message.sequence === 1 || message.sequence % 30 === 0) {
-            pushLog('收到视频帧', {
-              sequence: message.sequence,
-              width: message.width,
-              height: message.height,
-            });
-          }
+          pushLog('远端视频轨道解除静音', { trackId: track.id });
+          attemptVideoPlayback('track-unmute');
         };
+
+        track.onmute = () => {
+          setLiveState(false);
+          pushLog('远端视频轨道静音', { trackId: track.id });
+        };
+
+        track.onended = () => {
+          setLiveState(false);
+          pushLog('远端视频轨道结束', { trackId: track.id });
+        };
+
+        attemptVideoPlayback('track-attached');
       }
 
       function sendSignal(targetId, signal) {
@@ -524,8 +536,8 @@
           });
         };
 
-        peerConnection.ondatachannel = (event) => {
-          attachFrameChannel(event.channel);
+        peerConnection.ontrack = (event) => {
+          attachRemoteTrack(event.track, event.streams);
         };
 
         peerConnection.onconnectionstatechange = () => {
@@ -569,7 +581,6 @@
         debugLines = [];
         pushLog('开始连接查看端');
         closeConnection();
-        resetFrameView();
         setLiveState(false);
         setPublisherState('未检测到');
         setRTCText('等待信令');
@@ -615,7 +626,7 @@
             setPublisherState(message.hasPublisher ? '已连接' : '未检测到');
             viewerCount.textContent = String(message.viewerCount || 0);
             currentPublisherId = message.publisherId || null;
-            setRTCText(message.hasPublisher ? '等待 offer' : '等待发布端');
+            setRTCText(message.hasPublisher ? '等待视频 offer' : '等待发布端');
             pushLog('查看端已注册', { hasPublisher: message.hasPublisher, publisherId: message.publisherId });
             return;
           }
@@ -640,7 +651,7 @@
                 type: 'answer',
                 sdp: answer.sdp,
               });
-              setRTCText('已发送 answer');
+              setRTCText('已发送 answer，等待视频流');
               pushLog('已创建并发送 answer', { sdpLength: answer.sdp?.length || 0 });
             }
 

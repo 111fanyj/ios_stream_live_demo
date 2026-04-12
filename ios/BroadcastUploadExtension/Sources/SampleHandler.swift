@@ -1,26 +1,31 @@
+import CoreMedia
 import Foundation
-import CoreImage
 import OSLog
 import ReplayKit
-import UIKit
 import WebRTC
 
 final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate {
     private final class ViewerPeerState {
         let viewerID: String
         let peerConnection: RTCPeerConnection
-        let dataChannel: RTCDataChannel
+        let videoTrack: RTCVideoTrack
+        let videoSender: RTCRtpSender
         var hasRemoteDescription = false
         var pendingCandidates: [RTCIceCandidate] = []
 
-        init(viewerID: String, peerConnection: RTCPeerConnection, dataChannel: RTCDataChannel) {
+        init(
+            viewerID: String,
+            peerConnection: RTCPeerConnection,
+            videoTrack: RTCVideoTrack,
+            videoSender: RTCRtpSender
+        ) {
             self.viewerID = viewerID
             self.peerConnection = peerConnection
-            self.dataChannel = dataChannel
+            self.videoTrack = videoTrack
+            self.videoSender = videoSender
         }
     }
 
-    private let ciContext = CIContext(options: nil)
     private let logger = Logger(subsystem: "IOSStreamViewer", category: "BroadcastUploadExtension")
     private var webSocketSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
@@ -29,17 +34,20 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private let pingQueue = DispatchQueue(label: "IOSStreamViewer.BroadcastUploadExtension.WebSocketPing")
     private let diagnosticsQueue = DispatchQueue(label: "IOSStreamViewer.BroadcastUploadExtension.Diagnostics")
     private var sequenceNumber = 0
-    private var lastSentAt = Date.distantPast
+    private var lastSubmittedAt = Date.distantPast
     private var lastNoViewerLogAt = Date.distantPast
-    private var lastEncodingFailureLogAt = Date.distantPast
+    private var lastFrameProcessingFailureLogAt = Date.distantPast
     private var videoSampleCount = 0
     private var appAudioSampleCount = 0
     private var micAudioSampleCount = 0
     private var lastSampleTypeName = ""
     private var lastSampleAtText = ""
     private var lastSampleStatsWriteAt = Date.distantPast
-    private var lastEncodedStatsWriteAt = Date.distantPast
-    private let minimumSendInterval: TimeInterval = 0.12
+    private var lastSubmittedStatsWriteAt = Date.distantPast
+    private var adaptedVideoWidth = 0
+    private var adaptedVideoHeight = 0
+    private let targetFrameRate = 15
+    private let minimumSendInterval: TimeInterval = 1.0 / 15.0
     private let isoFormatter = ISO8601DateFormatter()
     private lazy var peerConnectionFactory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -48,9 +56,12 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             decoderFactory: RTCDefaultVideoDecoderFactory()
         )
     }()
+    private lazy var screenVideoSource: RTCVideoSource = {
+        peerConnectionFactory.videoSource(forScreenCast: true)
+    }()
+    private lazy var screenVideoCapturer = RTCVideoCapturer(delegate: screenVideoSource)
     private var viewerPeers: [String: ViewerPeerState] = [:]
     private var peerConnectionToViewerID: [ObjectIdentifier: String] = [:]
-    private var dataChannelToViewerID: [ObjectIdentifier: String] = [:]
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         resetDiagnosticsSession()
@@ -105,7 +116,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         stopWebSocketPingLoop()
         stopDiagnosticsHeartbeatLoop()
         flushSampleDiagnostics(force: true)
-        flushEncodedDiagnostics(force: true)
+        flushSubmittedFrameDiagnostics(force: true)
         resetPeerConnections()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
@@ -121,37 +132,30 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
-        guard now.timeIntervalSince(lastSentAt) >= minimumSendInterval else {
-            return
-        }
-
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            logEncodingFailureIfNeeded(message: "视频 sampleBuffer 中没有可用的 image buffer", at: now)
-            return
-        }
-
-        guard let payload = makeFramePayload(from: pixelBuffer) else {
-            logEncodingFailureIfNeeded(message: "视频 sampleBuffer 转 JPEG 失败", at: now)
-            return
-        }
-
-        recordEncodedFrame(at: now)
-
-        let deliveredViewerCount = deliverFramePayload(payload)
-        guard deliveredViewerCount > 0 else {
+        guard !viewerPeers.isEmpty else {
             if now.timeIntervalSince(lastNoViewerLogAt) >= 5 {
                 lastNoViewerLogAt = now
-                logEvent("视频帧已编码，但当前没有可用查看端 DataChannel")
+                logEvent("收到视频 sampleBuffer，但当前没有查看端连接")
             }
             return
         }
 
-        lastSentAt = now
+        guard now.timeIntervalSince(lastSubmittedAt) >= minimumSendInterval else {
+            return
+        }
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            logFrameProcessingFailureIfNeeded(message: "视频 sampleBuffer 中没有可用的 image buffer", at: now)
+            return
+        }
+
+        submitVideoFrame(from: pixelBuffer, sampleBuffer: sampleBuffer, at: now)
+        lastSubmittedAt = now
         if sequenceNumber == 1 || sequenceNumber % 30 == 0 {
-            logEvent("已发送第 \(sequenceNumber) 帧，送达 \(deliveredViewerCount) 个查看端")
+            logEvent("已提交第 \(sequenceNumber) 帧到 WebRTC 视频轨道，查看端 \(viewerPeers.count) 个")
         }
         updateDiagnostics(
-            status: "推流中（WebRTC）",
+            status: "推流中（WebRTC 视频）",
             sentFrameCount: sequenceNumber,
             lastFrameAt: isoFormatter.string(from: now)
         )
@@ -193,60 +197,9 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         return components.url
     }
 
-    private func makeFramePayload(from pixelBuffer: CVPixelBuffer) -> String? {
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let extent = ciImage.extent.integral
-        guard let cgImage = ciContext.createCGImage(ciImage, from: extent) else {
-            return nil
-        }
-
-        let image = UIImage(cgImage: cgImage)
-        guard let jpegData = image.jpegData(compressionQuality: 0.45) else {
-            return nil
-        }
-
-        sequenceNumber += 1
-
-        let payload: [String: Any] = [
-            "type": "frame",
-            "mimeType": "image/jpeg",
-            "width": Int(extent.width),
-            "height": Int(extent.height),
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000),
-            "sequence": sequenceNumber,
-            "imageData": jpegData.base64EncodedString()
-        ]
-
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            return nil
-        }
-
-        return json
-    }
-
-    private func deliverFramePayload(_ payload: String) -> Int {
-        let buffer = RTCDataBuffer(data: Data(payload.utf8), isBinary: false)
-        var deliveredViewerCount = 0
-
-        for viewerPeer in viewerPeers.values {
-            guard viewerPeer.dataChannel.readyState == .open else {
-                continue
-            }
-
-            if viewerPeer.dataChannel.sendData(buffer) {
-                deliveredViewerCount += 1
-            } else {
-                logger.error("Failed to send frame over data channel for \(viewerPeer.viewerID, privacy: .public)")
-            }
-        }
-
-        return deliveredViewerCount
-    }
-
     private func resetPeerConnections() {
         for viewerPeer in viewerPeers.values {
+            viewerPeer.peerConnection.removeTrack(viewerPeer.videoSender)
             viewerPeer.peerConnection.close()
         }
 
@@ -256,7 +209,6 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         viewerPeers.removeAll()
         peerConnectionToViewerID.removeAll()
-        dataChannelToViewerID.removeAll()
     }
 
     private func startPeerConnection(for viewerID: String) {
@@ -285,26 +237,29 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
-        let dataChannelConfiguration = RTCDataChannelConfiguration()
-        dataChannelConfiguration.isOrdered = false
+        let videoTrack = peerConnectionFactory.videoTrack(
+            with: screenVideoSource,
+            trackId: "screen-track-\(viewerID)"
+        )
+        videoTrack.isEnabled = true
 
-        guard let dataChannel = peerConnection.dataChannel(forLabel: "frames", configuration: dataChannelConfiguration) else {
-            logger.error("Failed to create data channel for \(viewerID, privacy: .public)")
-            logEvent("创建 DataChannel 失败: \(viewerID)")
+        guard let videoSender = peerConnection.add(videoTrack, streamIds: ["screen-stream-\(viewerID)"]) else {
+            logger.error("Failed to add video track for \(viewerID, privacy: .public)")
+            logEvent("附加视频轨道失败: \(viewerID)")
+            peerConnection.close()
             return
         }
-
-        dataChannel.delegate = self
 
         let viewerPeer = ViewerPeerState(
             viewerID: viewerID,
             peerConnection: peerConnection,
-            dataChannel: dataChannel
+            videoTrack: videoTrack,
+            videoSender: videoSender
         )
 
         viewerPeers[viewerID] = viewerPeer
         peerConnectionToViewerID[ObjectIdentifier(peerConnection)] = viewerID
-        dataChannelToViewerID[ObjectIdentifier(dataChannel)] = viewerID
+        logEvent("已为查看端 \(viewerID) 绑定视频轨道")
 
         let offerConstraints = RTCMediaConstraints(
             mandatoryConstraints: [
@@ -366,8 +321,41 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         logEvent("关闭查看端连接: \(viewerID)")
 
         peerConnectionToViewerID.removeValue(forKey: ObjectIdentifier(viewerPeer.peerConnection))
-        dataChannelToViewerID.removeValue(forKey: ObjectIdentifier(viewerPeer.dataChannel))
+        viewerPeer.peerConnection.removeTrack(viewerPeer.videoSender)
         viewerPeer.peerConnection.close()
+    }
+
+    private func submitVideoFrame(from pixelBuffer: CVPixelBuffer, sampleBuffer: CMSampleBuffer, at now: Date) {
+        adaptVideoSourceIfNeeded(for: pixelBuffer)
+
+        let presentationTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let timeStampNs: Int64
+        if presentationTimestamp.isValid {
+            timeStampNs = Int64(CMTimeGetSeconds(presentationTimestamp) * 1_000_000_000)
+        } else {
+            timeStampNs = Int64(now.timeIntervalSince1970 * 1_000_000_000)
+        }
+
+        let rtcPixelBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
+        let frame = RTCVideoFrame(buffer: rtcPixelBuffer, rotation: ._0, timeStampNs: timeStampNs)
+
+        sequenceNumber += 1
+        screenVideoCapturer.delegate?.capturer(screenVideoCapturer, didCapture: frame)
+        recordSubmittedFrame(at: now)
+    }
+
+    private func adaptVideoSourceIfNeeded(for pixelBuffer: CVPixelBuffer) {
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+
+        guard adaptedVideoWidth != width || adaptedVideoHeight != height else {
+            return
+        }
+
+        screenVideoSource.adaptOutputFormat(toWidth: Int32(width), height: Int32(height), fps: Int32(targetFrameRate))
+        adaptedVideoWidth = width
+        adaptedVideoHeight = height
+        logEvent("更新视频输出格式: \(width)x\(height) @ \(targetFrameRate)fps")
     }
 
     private func receiveSignal(from viewerID: String, signal: [String: Any]) {
@@ -411,7 +399,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             let pendingCandidates = viewerPeer.pendingCandidates
             viewerPeer.pendingCandidates.removeAll()
             for candidate in pendingCandidates {
-                viewerPeer.peerConnection.add(candidate)
+                self.addRemoteCandidate(candidate, to: viewerID, using: viewerPeer.peerConnection)
             }
 
             self.logEvent("远端 answer 已应用: \(viewerID)，补发 \(pendingCandidates.count) 个候选")
@@ -440,11 +428,26 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         let candidate = RTCIceCandidate(sdp: sdp, sdpMLineIndex: sdpMLineIndex, sdpMid: sdpMid)
 
         if viewerPeer.hasRemoteDescription {
-            viewerPeer.peerConnection.add(candidate)
-            logEvent("远端 candidate 已添加: \(viewerID)")
+            addRemoteCandidate(candidate, to: viewerID, using: viewerPeer.peerConnection)
         } else {
             viewerPeer.pendingCandidates.append(candidate)
             logEvent("远端 candidate 已缓存: \(viewerID)")
+        }
+    }
+
+    private func addRemoteCandidate(_ candidate: RTCIceCandidate, to viewerID: String, using peerConnection: RTCPeerConnection) {
+        peerConnection.add(candidate) { [weak self] error in
+            guard let self else {
+                return
+            }
+
+            if let error {
+                self.logger.error("Failed to add remote candidate for \(viewerID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                self.logEvent("远端 candidate 添加失败: \(viewerID) \(error.localizedDescription)")
+                return
+            }
+
+            self.logEvent("远端 candidate 已添加: \(viewerID)")
         }
     }
 
@@ -528,16 +531,18 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         let nowText = isoFormatter.string(from: Date())
         sequenceNumber = 0
-        lastSentAt = .distantPast
+        lastSubmittedAt = .distantPast
         lastNoViewerLogAt = .distantPast
-        lastEncodingFailureLogAt = .distantPast
+        lastFrameProcessingFailureLogAt = .distantPast
         videoSampleCount = 0
         appAudioSampleCount = 0
         micAudioSampleCount = 0
         lastSampleTypeName = ""
         lastSampleAtText = ""
         lastSampleStatsWriteAt = .distantPast
-        lastEncodedStatsWriteAt = .distantPast
+        lastSubmittedStatsWriteAt = .distantPast
+        adaptedVideoWidth = 0
+        adaptedVideoHeight = 0
 
         defaults.set([], forKey: StreamDefaults.diagnosticsRecentEventsKey)
         defaults.set("", forKey: StreamDefaults.diagnosticsLastErrorKey)
@@ -611,11 +616,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         lastSampleStatsWriteAt = now
     }
 
-    private func recordEncodedFrame(at now: Date) {
-        flushEncodedDiagnostics(force: sequenceNumber == 1 || sequenceNumber % 30 == 0 || now.timeIntervalSince(lastEncodedStatsWriteAt) >= 1)
+    private func recordSubmittedFrame(at now: Date) {
+        flushSubmittedFrameDiagnostics(force: sequenceNumber == 1 || sequenceNumber % 30 == 0 || now.timeIntervalSince(lastSubmittedStatsWriteAt) >= 1)
     }
 
-    private func flushEncodedDiagnostics(force: Bool) {
+    private func flushSubmittedFrameDiagnostics(force: Bool) {
         guard force else {
             return
         }
@@ -630,15 +635,15 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         } else {
             defaults.set("", forKey: StreamDefaults.diagnosticsLastEncodedFrameAtKey)
         }
-        lastEncodedStatsWriteAt = Date()
+        lastSubmittedStatsWriteAt = Date()
     }
 
-    private func logEncodingFailureIfNeeded(message: String, at now: Date) {
-        guard now.timeIntervalSince(lastEncodingFailureLogAt) >= 5 else {
+    private func logFrameProcessingFailureIfNeeded(message: String, at now: Date) {
+        guard now.timeIntervalSince(lastFrameProcessingFailureLogAt) >= 5 else {
             return
         }
 
-        lastEncodingFailureLogAt = now
+        lastFrameProcessingFailureLogAt = now
         logEvent(message)
     }
 
@@ -871,35 +876,10 @@ extension SampleHandler: RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
-        dataChannel.delegate = self
-        if let viewerID = peerConnectionToViewerID[ObjectIdentifier(peerConnection)] {
-            dataChannelToViewerID[ObjectIdentifier(dataChannel)] = viewerID
-            logEvent("PeerConnection 打开远端 DataChannel: \(viewerID)")
-        }
-    }
-}
-
-extension SampleHandler: RTCDataChannelDelegate {
-    func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
-        guard let viewerID = dataChannelToViewerID[ObjectIdentifier(dataChannel)] else {
+        guard let viewerID = peerConnectionToViewerID[ObjectIdentifier(peerConnection)] else {
             return
         }
 
-        switch dataChannel.readyState {
-        case .open:
-            logger.log("Data channel opened for \(viewerID, privacy: .public)")
-            updateDiagnostics(status: "WebRTC 数据通道已连接")
-            logEvent("DataChannel 已打开: \(viewerID)")
-        case .closed:
-            logger.log("Data channel closed for \(viewerID, privacy: .public)")
-            logEvent("DataChannel 已关闭: \(viewerID)")
-            closePeerConnection(for: viewerID)
-        default:
-            logEvent("DataChannel 状态变化: \(viewerID) -> \(String(describing: dataChannel.readyState))")
-            break
-        }
-    }
-
-    func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+        logEvent("收到意外 DataChannel: \(viewerID) -> \(dataChannel.label)")
     }
 }

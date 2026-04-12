@@ -86,7 +86,7 @@ function broadcastRoomState(roomId) {
     viewerCount: room.viewers.size,
     probeCount: room.probes.size,
     publisherConnectedAt: room.publisherConnectedAt,
-    transport: 'webrtc-datachannel'
+    transport: 'webrtc-video-track'
   });
 
   log('room_state_broadcast', {
@@ -131,7 +131,7 @@ app.get('/health', (_req, res) => {
     viewerCount: room.viewers.size,
     probeCount: room.probes.size,
     publisherConnectedAt: room.publisherConnectedAt,
-    transport: 'webrtc-datachannel'
+    transport: 'webrtc-video-track'
   }));
 
   res.json({ ok: true, rooms: roomSummary });
@@ -208,7 +208,7 @@ wss.on('connection', (ws, req) => {
       hasPublisher: Boolean(room.publisher),
       publisherId: room.publisher?.clientId ?? null,
       viewerCount: room.viewers.size,
-      transport: 'webrtc-datachannel'
+      transport: 'webrtc-video-track'
     });
 
     if (room.publisher) {
@@ -229,7 +229,7 @@ wss.on('connection', (ws, req) => {
       publisherId: room.publisher?.clientId ?? null,
       viewerCount: room.viewers.size,
       probeCount: room.probes.size,
-      transport: 'webrtc-datachannel'
+      transport: 'webrtc-video-track'
     });
 
     broadcastRoomState(roomId);

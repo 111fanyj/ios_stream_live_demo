@@ -20,7 +20,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("iOS 实时屏幕推流")
                             .font(.system(size: 34, weight: .bold, design: .rounded))
-                        Text("先保存服务端地址，再通过系统屏幕录制入口启动 Broadcast Extension。扩展会通过 WebRTC DataChannel 把屏幕帧发给网页查看端。")
+                        Text("先保存服务端地址，再通过系统屏幕录制入口启动 Broadcast Extension。扩展会通过 WebRTC 视频轨道把屏幕画面直接推给网页查看端。")
                             .foregroundStyle(.secondary)
                     }
 
@@ -155,8 +155,8 @@ struct ContentView: View {
                         Text("视频 sample 数: \(diagnostics.videoSampleCount)")
                         Text("应用音频 sample 数: \(diagnostics.appAudioSampleCount)")
                         Text("麦克风 sample 数: \(diagnostics.micAudioSampleCount)")
-                        Text("已编码帧数: \(diagnostics.encodedFrameCount)")
-                        Text("最后编码时间: \(diagnostics.lastEncodedFrameAt.isEmpty ? "暂无" : diagnostics.lastEncodedFrameAt)")
+                        Text("已提交视频帧数: \(diagnostics.encodedFrameCount)")
+                        Text("最后提交时间: \(diagnostics.lastEncodedFrameAt.isEmpty ? "暂无" : diagnostics.lastEncodedFrameAt)")
                         Text("已发送帧数: \(diagnostics.sentFrameCount)")
                         Text("最后一帧时间: \(diagnostics.lastFrameAt.isEmpty ? "暂无" : diagnostics.lastFrameAt)")
                         Text("最后错误: \(diagnostics.lastError.isEmpty ? "无" : diagnostics.lastError)")
@@ -267,14 +267,14 @@ struct ContentView: View {
         }
 
         if diagnostics.encodedFrameCount == 0 {
-            return "已经收到视频 sample buffer，但还没有成功编码成 JPEG；问题在图像提取或编码阶段。"
+            return "已经收到视频 sample buffer，但还没有开始提交到 WebRTC 视频源；问题在视频帧处理阶段。"
         }
 
         if diagnostics.sentFrameCount == 0 {
-            return "已经收到并编码视频帧，但还没有真正发给查看端；通常是查看端尚未完成 WebRTC/DataChannel 建连。"
+            return "已经开始向 WebRTC 视频轨道提交帧，但还没有形成稳定下行；通常是查看端尚未完成 WebRTC 视频连接。"
         }
 
-        return "广播扩展已经收到视频数据，并且已经向查看端发出帧。"
+        return "广播扩展已经收到视频数据，并且正在通过 WebRTC 视频轨道向查看端发送画面。"
     }
 
     private func refreshDiagnostics() {
