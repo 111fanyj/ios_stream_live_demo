@@ -112,9 +112,13 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("启动直播")
                             .font(.headline)
-                        Text("系统按钮会直接调起 ReplayKit 的广播选择器，随后由扩展通过 WebRTC 建链。")
+                        Text("优先用下面这个系统广播按钮测试。它会直接指定当前 App 对应的 Broadcast Extension。")
                             .foregroundStyle(.secondary)
                             .font(.subheadline)
+
+                        Text("扩展 Bundle ID: " + (StreamDefaults.broadcastExtensionBundleIdentifier ?? "无法解析"))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
 
                         BroadcastPickerButton()
                             .frame(height: 50)

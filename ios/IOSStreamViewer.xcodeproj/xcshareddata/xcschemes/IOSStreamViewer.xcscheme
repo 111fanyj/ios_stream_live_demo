@@ -40,6 +40,13 @@
       </MacroExpansion>
       <Testables>
       </Testables>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "IDEPreferLogStreaming"
+            value = "YES"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
       <CommandLineArguments>
       </CommandLineArguments>
    </TestAction>
@@ -63,6 +70,13 @@
             ReferencedContainer = "container:IOSStreamViewer.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "IDEPreferLogStreaming"
+            value = "YES"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
       <CommandLineArguments>
       </CommandLineArguments>
    </LaunchAction>
@@ -82,6 +96,13 @@
             ReferencedContainer = "container:IOSStreamViewer.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "IDEPreferLogStreaming"
+            value = "YES"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">

@@ -2,6 +2,7 @@ import Foundation
 
 enum StreamDefaults {
     static let appGroupIdentifier = "group.com.example.IOSStreamViewer.shared"
+    static let broadcastExtensionSuffix = ".BroadcastUploadExtension"
     static let serverURLKey = "stream.serverURL"
     static let roomIDKey = "stream.roomID"
     static let tokenKey = "stream.token"
@@ -12,6 +13,14 @@ enum StreamDefaults {
     static let diagnosticsUpdatedAtKey = "stream.diagnostics.updatedAt"
     static let diagnosticsSentFrameCountKey = "stream.diagnostics.sentFrameCount"
     static let diagnosticsLastFrameAtKey = "stream.diagnostics.lastFrameAt"
+
+    static var broadcastExtensionBundleIdentifier: String? {
+        guard let appBundleIdentifier = Bundle.main.bundleIdentifier else {
+            return nil
+        }
+
+        return appBundleIdentifier + broadcastExtensionSuffix
+    }
 }
 
 struct StreamConfiguration: Codable {
