@@ -46,8 +46,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private var lastSubmittedStatsWriteAt = Date.distantPast
     private var adaptedVideoWidth = 0
     private var adaptedVideoHeight = 0
-    private let targetFrameRate = 15
-    private let minimumSendInterval: TimeInterval = 1.0 / 15.0
+    private let targetFrameRate = 12
+    private let targetMaxLongEdge = 960
+    private let targetMaxBitrateBps = 1_200_000
+    private let targetMinBitrateBps = 300_000
+    private let minimumSendInterval: TimeInterval = 1.0 / 12.0
     private let isoFormatter = ISO8601DateFormatter()
     private lazy var peerConnectionFactory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -91,6 +94,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         logger.log("Broadcast started, connecting to \(url.absoluteString, privacy: .public)")
         updateDiagnostics(status: "正在连接 \(url.host ?? configuration.serverURL)")
         logEvent("准备连接 WebSocket: \(url.absoluteString)")
+        logEvent("低延迟预设: 最长边 \(targetMaxLongEdge)px / \(targetFrameRate)fps / \(targetMinBitrateBps / 1000)-\(targetMaxBitrateBps / 1000)kbps")
 
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         webSocketSession = session
@@ -250,6 +254,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
+        configureVideoSender(videoSender, viewerID: viewerID)
+
         let viewerPeer = ViewerPeerState(
             viewerID: viewerID,
             peerConnection: peerConnection,
@@ -345,8 +351,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     }
 
     private func adaptVideoSourceIfNeeded(for pixelBuffer: CVPixelBuffer) {
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let targetSize = preferredOutputSize(forWidth: sourceWidth, height: sourceHeight)
+        let width = targetSize.width
+        let height = targetSize.height
 
         guard adaptedVideoWidth != width || adaptedVideoHeight != height else {
             return
@@ -355,7 +364,49 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         screenVideoSource.adaptOutputFormat(toWidth: Int32(width), height: Int32(height), fps: Int32(targetFrameRate))
         adaptedVideoWidth = width
         adaptedVideoHeight = height
-        logEvent("更新视频输出格式: \(width)x\(height) @ \(targetFrameRate)fps")
+        if sourceWidth != width || sourceHeight != height {
+            logEvent("更新视频输出格式: \(sourceWidth)x\(sourceHeight) -> \(width)x\(height) @ \(targetFrameRate)fps")
+        } else {
+            logEvent("更新视频输出格式: \(width)x\(height) @ \(targetFrameRate)fps")
+        }
+    }
+
+    private func preferredOutputSize(forWidth width: Int, height: Int) -> (width: Int, height: Int) {
+        guard width > 0, height > 0 else {
+            return (width: width, height: height)
+        }
+
+        let longestSide = max(width, height)
+        guard longestSide > targetMaxLongEdge else {
+            return (width: evenDimension(width), height: evenDimension(height))
+        }
+
+        let scale = Double(targetMaxLongEdge) / Double(longestSide)
+        let scaledWidth = max(2, Int((Double(width) * scale).rounded()))
+        let scaledHeight = max(2, Int((Double(height) * scale).rounded()))
+        return (width: evenDimension(scaledWidth), height: evenDimension(scaledHeight))
+    }
+
+    private func evenDimension(_ value: Int) -> Int {
+        let clamped = max(2, value)
+        return clamped.isMultiple(of: 2) ? clamped : clamped - 1
+    }
+
+    private func configureVideoSender(_ videoSender: RTCRtpSender, viewerID: String) {
+        let parameters = videoSender.parameters
+        parameters.degradationPreference = NSNumber(value: RTCDegradationPreference.maintainFramerate.rawValue)
+
+        for encoding in parameters.encodings {
+            encoding.isActive = true
+            encoding.maxBitrateBps = NSNumber(value: targetMaxBitrateBps)
+            encoding.minBitrateBps = NSNumber(value: targetMinBitrateBps)
+            encoding.maxFramerate = NSNumber(value: targetFrameRate)
+            encoding.bitratePriority = 1.0
+            encoding.networkPriority = .high
+        }
+
+        videoSender.parameters = parameters
+        logEvent("已应用低延迟发送参数: \(viewerID)")
     }
 
     private func receiveSignal(from viewerID: String, signal: [String: Any]) {
