@@ -14,6 +14,15 @@ enum StreamDefaults {
     static let diagnosticsSentFrameCountKey = "stream.diagnostics.sentFrameCount"
     static let diagnosticsLastFrameAtKey = "stream.diagnostics.lastFrameAt"
     static let diagnosticsRecentEventsKey = "stream.diagnostics.recentEvents"
+    static let diagnosticsBroadcastStartedAtKey = "stream.diagnostics.broadcastStartedAt"
+    static let diagnosticsExtensionHeartbeatAtKey = "stream.diagnostics.extensionHeartbeatAt"
+    static let diagnosticsLastSampleAtKey = "stream.diagnostics.lastSampleAt"
+    static let diagnosticsLastSampleTypeKey = "stream.diagnostics.lastSampleType"
+    static let diagnosticsVideoSampleCountKey = "stream.diagnostics.videoSampleCount"
+    static let diagnosticsAppAudioSampleCountKey = "stream.diagnostics.appAudioSampleCount"
+    static let diagnosticsMicAudioSampleCountKey = "stream.diagnostics.micAudioSampleCount"
+    static let diagnosticsEncodedFrameCountKey = "stream.diagnostics.encodedFrameCount"
+    static let diagnosticsLastEncodedFrameAtKey = "stream.diagnostics.lastEncodedFrameAt"
 
     static var broadcastExtensionBundleIdentifier: String? {
         guard let appBundleIdentifier = Bundle.main.bundleIdentifier else {
@@ -65,6 +74,15 @@ struct StreamDiagnostics {
     var sentFrameCount: Int
     var lastFrameAt: String
     var recentEvents: [String]
+    var broadcastStartedAt: String
+    var extensionHeartbeatAt: String
+    var lastSampleAt: String
+    var lastSampleType: String
+    var videoSampleCount: Int
+    var appAudioSampleCount: Int
+    var micAudioSampleCount: Int
+    var encodedFrameCount: Int
+    var lastEncodedFrameAt: String
 
     static let empty = StreamDiagnostics(
         status: "未开始",
@@ -72,7 +90,16 @@ struct StreamDiagnostics {
         updatedAt: "",
         sentFrameCount: 0,
         lastFrameAt: "",
-        recentEvents: []
+        recentEvents: [],
+        broadcastStartedAt: "",
+        extensionHeartbeatAt: "",
+        lastSampleAt: "",
+        lastSampleType: "",
+        videoSampleCount: 0,
+        appAudioSampleCount: 0,
+        micAudioSampleCount: 0,
+        encodedFrameCount: 0,
+        lastEncodedFrameAt: ""
     )
 
     static func load() -> StreamDiagnostics {
@@ -86,7 +113,16 @@ struct StreamDiagnostics {
             updatedAt: defaults.string(forKey: StreamDefaults.diagnosticsUpdatedAtKey) ?? empty.updatedAt,
             sentFrameCount: defaults.integer(forKey: StreamDefaults.diagnosticsSentFrameCountKey),
             lastFrameAt: defaults.string(forKey: StreamDefaults.diagnosticsLastFrameAtKey) ?? empty.lastFrameAt,
-            recentEvents: defaults.stringArray(forKey: StreamDefaults.diagnosticsRecentEventsKey) ?? empty.recentEvents
+            recentEvents: defaults.stringArray(forKey: StreamDefaults.diagnosticsRecentEventsKey) ?? empty.recentEvents,
+            broadcastStartedAt: defaults.string(forKey: StreamDefaults.diagnosticsBroadcastStartedAtKey) ?? empty.broadcastStartedAt,
+            extensionHeartbeatAt: defaults.string(forKey: StreamDefaults.diagnosticsExtensionHeartbeatAtKey) ?? empty.extensionHeartbeatAt,
+            lastSampleAt: defaults.string(forKey: StreamDefaults.diagnosticsLastSampleAtKey) ?? empty.lastSampleAt,
+            lastSampleType: defaults.string(forKey: StreamDefaults.diagnosticsLastSampleTypeKey) ?? empty.lastSampleType,
+            videoSampleCount: defaults.integer(forKey: StreamDefaults.diagnosticsVideoSampleCountKey),
+            appAudioSampleCount: defaults.integer(forKey: StreamDefaults.diagnosticsAppAudioSampleCountKey),
+            micAudioSampleCount: defaults.integer(forKey: StreamDefaults.diagnosticsMicAudioSampleCountKey),
+            encodedFrameCount: defaults.integer(forKey: StreamDefaults.diagnosticsEncodedFrameCountKey),
+            lastEncodedFrameAt: defaults.string(forKey: StreamDefaults.diagnosticsLastEncodedFrameAtKey) ?? empty.lastEncodedFrameAt
         )
     }
 }

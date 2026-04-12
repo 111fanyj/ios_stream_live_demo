@@ -11,6 +11,15 @@ enum StreamDefaults {
     static let diagnosticsSentFrameCountKey = "stream.diagnostics.sentFrameCount"
     static let diagnosticsLastFrameAtKey = "stream.diagnostics.lastFrameAt"
     static let diagnosticsRecentEventsKey = "stream.diagnostics.recentEvents"
+    static let diagnosticsBroadcastStartedAtKey = "stream.diagnostics.broadcastStartedAt"
+    static let diagnosticsExtensionHeartbeatAtKey = "stream.diagnostics.extensionHeartbeatAt"
+    static let diagnosticsLastSampleAtKey = "stream.diagnostics.lastSampleAt"
+    static let diagnosticsLastSampleTypeKey = "stream.diagnostics.lastSampleType"
+    static let diagnosticsVideoSampleCountKey = "stream.diagnostics.videoSampleCount"
+    static let diagnosticsAppAudioSampleCountKey = "stream.diagnostics.appAudioSampleCount"
+    static let diagnosticsMicAudioSampleCountKey = "stream.diagnostics.micAudioSampleCount"
+    static let diagnosticsEncodedFrameCountKey = "stream.diagnostics.encodedFrameCount"
+    static let diagnosticsLastEncodedFrameAtKey = "stream.diagnostics.lastEncodedFrameAt"
 }
 
 struct StreamConfiguration {

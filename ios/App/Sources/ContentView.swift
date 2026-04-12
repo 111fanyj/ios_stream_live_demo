@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var isTestingConnection = false
     @State private var localNetworkPermissionResult = "未请求"
     @State private var isRequestingLocalNetworkPermission = false
+    private let diagnosticsDateFormatter = ISO8601DateFormatter()
 
     var body: some View {
         NavigationStack {
@@ -142,8 +143,20 @@ struct ContentView: View {
                             .buttonStyle(.bordered)
                         }
 
+                        Text("链路判断: \(broadcastDiagnosticSummary)")
+                            .foregroundStyle(.primary)
+
+                        Text("扩展运行状态: \(extensionRuntimeSummary)")
                         Text("状态: \(diagnostics.status)")
+                        Text("广播启动时间: \(diagnostics.broadcastStartedAt.isEmpty ? "暂无" : diagnostics.broadcastStartedAt)")
+                        Text("扩展心跳: \(diagnostics.extensionHeartbeatAt.isEmpty ? "暂无" : diagnostics.extensionHeartbeatAt)")
                         Text("最近更新时间: \(diagnostics.updatedAt.isEmpty ? "暂无" : diagnostics.updatedAt)")
+                        Text("最近 sample: \(sampleSummaryText)")
+                        Text("视频 sample 数: \(diagnostics.videoSampleCount)")
+                        Text("应用音频 sample 数: \(diagnostics.appAudioSampleCount)")
+                        Text("麦克风 sample 数: \(diagnostics.micAudioSampleCount)")
+                        Text("已编码帧数: \(diagnostics.encodedFrameCount)")
+                        Text("最后编码时间: \(diagnostics.lastEncodedFrameAt.isEmpty ? "暂无" : diagnostics.lastEncodedFrameAt)")
                         Text("已发送帧数: \(diagnostics.sentFrameCount)")
                         Text("最后一帧时间: \(diagnostics.lastFrameAt.isEmpty ? "暂无" : diagnostics.lastFrameAt)")
                         Text("最后错误: \(diagnostics.lastError.isEmpty ? "无" : diagnostics.lastError)")
@@ -209,7 +222,59 @@ struct ContentView: View {
             .onAppear {
                 refreshDiagnostics()
             }
+            .task {
+                while !Task.isCancelled {
+                    refreshDiagnostics()
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
         }
+    }
+
+    private var sampleSummaryText: String {
+        guard !diagnostics.lastSampleAt.isEmpty else {
+            return "暂无"
+        }
+
+        let sampleType = diagnostics.lastSampleType.isEmpty ? "unknown" : diagnostics.lastSampleType
+        return "\(sampleType) / \(diagnostics.lastSampleAt)"
+    }
+
+    private var extensionRuntimeSummary: String {
+        guard !diagnostics.broadcastStartedAt.isEmpty else {
+            return "未看到广播扩展启动"
+        }
+
+        guard let heartbeatDate = diagnosticsDateFormatter.date(from: diagnostics.extensionHeartbeatAt) else {
+            return "已启动，但没有可用心跳时间"
+        }
+
+        let age = Date().timeIntervalSince(heartbeatDate)
+        if age <= 5 {
+            return "扩展运行中"
+        }
+
+        return "扩展最近没有心跳，可能已退出或挂起"
+    }
+
+    private var broadcastDiagnosticSummary: String {
+        guard !diagnostics.broadcastStartedAt.isEmpty else {
+            return "还没有检测到广播扩展启动；先确认系统广播面板里已真正开始广播。"
+        }
+
+        if diagnostics.videoSampleCount == 0 {
+            return "扩展已启动，但还没有收到任何视频 sample buffer；说明 ReplayKit 还没有把屏幕帧送进 processSampleBuffer(.video)。"
+        }
+
+        if diagnostics.encodedFrameCount == 0 {
+            return "已经收到视频 sample buffer，但还没有成功编码成 JPEG；问题在图像提取或编码阶段。"
+        }
+
+        if diagnostics.sentFrameCount == 0 {
+            return "已经收到并编码视频帧，但还没有真正发给查看端；通常是查看端尚未完成 WebRTC/DataChannel 建连。"
+        }
+
+        return "广播扩展已经收到视频数据，并且已经向查看端发出帧。"
     }
 
     private func refreshDiagnostics() {

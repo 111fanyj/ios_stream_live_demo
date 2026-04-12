@@ -135,6 +135,7 @@
 			buildPhases = (
 				9AD8D55C9268D6DCFDA9C7FF /* Sources */,
 				42FC88383C44D46FBD8226EC /* Frameworks */,
+				19748C2C7EDE7291CDD531D0 /* Embed WebRTC Framework */,
 			);
 			buildRules = (
 			);
@@ -187,6 +188,28 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		19748C2C7EDE7291CDD531D0 /* Embed WebRTC Framework */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed WebRTC Framework";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\n\nFRAMEWORK_NAME=\"WebRTC.framework\"\nSOURCE_PATH=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORK_NAME}\"\nDEST_DIR=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\nDEST_PATH=\"${DEST_DIR}/${FRAMEWORK_NAME}\"\n\nif [ ! -d \"${SOURCE_PATH}\" ]; then\n  echo \"error: Missing ${SOURCE_PATH}\"\n  exit 1\nfi\n\nmkdir -p \"${DEST_DIR}\"\nrm -rf \"${DEST_PATH}\"\nditto \"${SOURCE_PATH}\" \"${DEST_PATH}\"\n\nif [ \"${CODE_SIGNING_ALLOWED:-NO}\" = \"YES\" ] && [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n  /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --preserve-metadata=identifier,entitlements \"${DEST_PATH}\"\nfi";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		896A43628D4968570144D774 /* Sources */ = {

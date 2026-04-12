@@ -73,9 +73,10 @@ targets:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
         NSExtension:
+          NSExtensionAttributes:
+            RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
           NSExtensionPointIdentifier: com.apple.broadcast-services-upload
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
-          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
     entitlements:
       path: BroadcastUploadExtension/BroadcastUploadExtension.entitlements
       properties:
@@ -88,3 +89,26 @@ targets:
         INFOPLIST_FILE: BroadcastUploadExtension/Info.plist
         APPLICATION_EXTENSION_API_ONLY: YES
         IPHONEOS_DEPLOYMENT_TARGET: 17.0
+    postBuildScripts:
+      - name: Embed WebRTC Framework
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+
+          FRAMEWORK_NAME="WebRTC.framework"
+          SOURCE_PATH="${BUILT_PRODUCTS_DIR}/${FRAMEWORK_NAME}"
+          DEST_DIR="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
+          DEST_PATH="${DEST_DIR}/${FRAMEWORK_NAME}"
+
+          if [ ! -d "${SOURCE_PATH}" ]; then
+            echo "error: Missing ${SOURCE_PATH}"
+            exit 1
+          fi
+
+          mkdir -p "${DEST_DIR}"
+          rm -rf "${DEST_PATH}"
+          ditto "${SOURCE_PATH}" "${DEST_PATH}"
+
+          if [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+            /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" --preserve-metadata=identifier,entitlements "${DEST_PATH}"
+          fi

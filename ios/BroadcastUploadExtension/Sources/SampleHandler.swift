@@ -25,10 +25,20 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private var webSocketSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
     private var pingTimer: DispatchSourceTimer?
+    private var diagnosticsHeartbeatTimer: DispatchSourceTimer?
     private let pingQueue = DispatchQueue(label: "IOSStreamViewer.BroadcastUploadExtension.WebSocketPing")
+    private let diagnosticsQueue = DispatchQueue(label: "IOSStreamViewer.BroadcastUploadExtension.Diagnostics")
     private var sequenceNumber = 0
     private var lastSentAt = Date.distantPast
     private var lastNoViewerLogAt = Date.distantPast
+    private var lastEncodingFailureLogAt = Date.distantPast
+    private var videoSampleCount = 0
+    private var appAudioSampleCount = 0
+    private var micAudioSampleCount = 0
+    private var lastSampleTypeName = ""
+    private var lastSampleAtText = ""
+    private var lastSampleStatsWriteAt = Date.distantPast
+    private var lastEncodedStatsWriteAt = Date.distantPast
     private let minimumSendInterval: TimeInterval = 0.12
     private let isoFormatter = ISO8601DateFormatter()
     private lazy var peerConnectionFactory: RTCPeerConnectionFactory = {
@@ -43,7 +53,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private var dataChannelToViewerID: [ObjectIdentifier: String] = [:]
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
-        clearRecentEvents()
+        resetDiagnosticsSession()
+        startDiagnosticsHeartbeatLoop()
         updateDiagnostics(status: "广播启动中")
         logEvent("广播扩展启动")
         resetPeerConnections()
@@ -79,15 +90,22 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     }
 
     override func broadcastPaused() {
+        updateDiagnostics(status: "广播已暂停")
+        logEvent("广播暂停")
     }
 
     override func broadcastResumed() {
+        updateDiagnostics(status: "广播已恢复")
+        logEvent("广播恢复")
     }
 
     override func broadcastFinished() {
         updateDiagnostics(status: "广播结束")
         logEvent("广播结束")
         stopWebSocketPingLoop()
+        stopDiagnosticsHeartbeatLoop()
+        flushSampleDiagnostics(force: true)
+        flushEncodedDiagnostics(force: true)
         resetPeerConnections()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
@@ -96,20 +114,28 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     }
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
+        let now = Date()
+        recordSampleBuffer(sampleBufferType, at: now)
+
         guard sampleBufferType == .video else {
             return
         }
 
-        let now = Date()
         guard now.timeIntervalSince(lastSentAt) >= minimumSendInterval else {
             return
         }
 
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
-              let payload = makeFramePayload(from: pixelBuffer)
-        else {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            logEncodingFailureIfNeeded(message: "视频 sampleBuffer 中没有可用的 image buffer", at: now)
             return
         }
+
+        guard let payload = makeFramePayload(from: pixelBuffer) else {
+            logEncodingFailureIfNeeded(message: "视频 sampleBuffer 转 JPEG 失败", at: now)
+            return
+        }
+
+        recordEncodedFrame(at: now)
 
         let deliveredViewerCount = deliverFramePayload(payload)
         guard deliveredViewerCount > 0 else {
@@ -477,12 +503,143 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         pingTimer = nil
     }
 
-    private func clearRecentEvents() {
+    private func startDiagnosticsHeartbeatLoop() {
+        stopDiagnosticsHeartbeatLoop()
+
+        let timer = DispatchSource.makeTimerSource(queue: diagnosticsQueue)
+        timer.schedule(deadline: .now(), repeating: 1)
+        timer.setEventHandler { [weak self] in
+            self?.updateExtensionHeartbeat()
+        }
+        diagnosticsHeartbeatTimer = timer
+        timer.resume()
+    }
+
+    private func stopDiagnosticsHeartbeatLoop() {
+        diagnosticsHeartbeatTimer?.setEventHandler {}
+        diagnosticsHeartbeatTimer?.cancel()
+        diagnosticsHeartbeatTimer = nil
+    }
+
+    private func resetDiagnosticsSession() {
         guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
             return
         }
 
+        let nowText = isoFormatter.string(from: Date())
+        sequenceNumber = 0
+        lastSentAt = .distantPast
+        lastNoViewerLogAt = .distantPast
+        lastEncodingFailureLogAt = .distantPast
+        videoSampleCount = 0
+        appAudioSampleCount = 0
+        micAudioSampleCount = 0
+        lastSampleTypeName = ""
+        lastSampleAtText = ""
+        lastSampleStatsWriteAt = .distantPast
+        lastEncodedStatsWriteAt = .distantPast
+
         defaults.set([], forKey: StreamDefaults.diagnosticsRecentEventsKey)
+        defaults.set("", forKey: StreamDefaults.diagnosticsLastErrorKey)
+        defaults.set(nowText, forKey: StreamDefaults.diagnosticsBroadcastStartedAtKey)
+        defaults.set(nowText, forKey: StreamDefaults.diagnosticsExtensionHeartbeatAtKey)
+        defaults.set("", forKey: StreamDefaults.diagnosticsLastSampleAtKey)
+        defaults.set("", forKey: StreamDefaults.diagnosticsLastSampleTypeKey)
+        defaults.set(0, forKey: StreamDefaults.diagnosticsVideoSampleCountKey)
+        defaults.set(0, forKey: StreamDefaults.diagnosticsAppAudioSampleCountKey)
+        defaults.set(0, forKey: StreamDefaults.diagnosticsMicAudioSampleCountKey)
+        defaults.set(0, forKey: StreamDefaults.diagnosticsEncodedFrameCountKey)
+        defaults.set("", forKey: StreamDefaults.diagnosticsLastEncodedFrameAtKey)
+        defaults.set(0, forKey: StreamDefaults.diagnosticsSentFrameCountKey)
+        defaults.set("", forKey: StreamDefaults.diagnosticsLastFrameAtKey)
+        defaults.set(nowText, forKey: StreamDefaults.diagnosticsUpdatedAtKey)
+    }
+
+    private func updateExtensionHeartbeat() {
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return
+        }
+
+        let nowText = isoFormatter.string(from: Date())
+        defaults.set(nowText, forKey: StreamDefaults.diagnosticsExtensionHeartbeatAtKey)
+        defaults.set(nowText, forKey: StreamDefaults.diagnosticsUpdatedAtKey)
+    }
+
+    private func recordSampleBuffer(_ sampleBufferType: RPSampleBufferType, at now: Date) {
+        switch sampleBufferType {
+        case .video:
+            videoSampleCount += 1
+            lastSampleTypeName = "video"
+            if videoSampleCount == 1 || videoSampleCount % 120 == 0 {
+                logEvent("收到视频 sampleBuffer，第 \(videoSampleCount) 个")
+            }
+        case .audioApp:
+            appAudioSampleCount += 1
+            lastSampleTypeName = "audioApp"
+            if appAudioSampleCount == 1 {
+                logEvent("收到应用音频 sampleBuffer")
+            }
+        case .audioMic:
+            micAudioSampleCount += 1
+            lastSampleTypeName = "audioMic"
+            if micAudioSampleCount == 1 {
+                logEvent("收到麦克风音频 sampleBuffer")
+            }
+        @unknown default:
+            lastSampleTypeName = "unknown"
+        }
+
+        lastSampleAtText = isoFormatter.string(from: now)
+        flushSampleDiagnostics(force: false)
+    }
+
+    private func flushSampleDiagnostics(force: Bool) {
+        let now = Date()
+        guard force || now.timeIntervalSince(lastSampleStatsWriteAt) >= 1 else {
+            return
+        }
+
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return
+        }
+
+        defaults.set(videoSampleCount, forKey: StreamDefaults.diagnosticsVideoSampleCountKey)
+        defaults.set(appAudioSampleCount, forKey: StreamDefaults.diagnosticsAppAudioSampleCountKey)
+        defaults.set(micAudioSampleCount, forKey: StreamDefaults.diagnosticsMicAudioSampleCountKey)
+        defaults.set(lastSampleTypeName, forKey: StreamDefaults.diagnosticsLastSampleTypeKey)
+        defaults.set(lastSampleAtText, forKey: StreamDefaults.diagnosticsLastSampleAtKey)
+        lastSampleStatsWriteAt = now
+    }
+
+    private func recordEncodedFrame(at now: Date) {
+        flushEncodedDiagnostics(force: sequenceNumber == 1 || sequenceNumber % 30 == 0 || now.timeIntervalSince(lastEncodedStatsWriteAt) >= 1)
+    }
+
+    private func flushEncodedDiagnostics(force: Bool) {
+        guard force else {
+            return
+        }
+
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return
+        }
+
+        defaults.set(sequenceNumber, forKey: StreamDefaults.diagnosticsEncodedFrameCountKey)
+        if sequenceNumber > 0 {
+            defaults.set(isoFormatter.string(from: Date()), forKey: StreamDefaults.diagnosticsLastEncodedFrameAtKey)
+        } else {
+            defaults.set("", forKey: StreamDefaults.diagnosticsLastEncodedFrameAtKey)
+        }
+        lastEncodedStatsWriteAt = Date()
+    }
+
+    private func logEncodingFailureIfNeeded(message: String, at now: Date) {
+        guard now.timeIntervalSince(lastEncodingFailureLogAt) >= 5 else {
+            return
+        }
+
+        lastEncodingFailureLogAt = now
+        logEvent(message)
     }
 
     private func logEvent(_ message: String) {
@@ -535,6 +692,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 self?.logger.error("Receive loop failed: \(error.localizedDescription, privacy: .public)")
                 self?.updateDiagnostics(status: "连接中断", error: error.localizedDescription)
                 self?.stopWebSocketPingLoop()
+                self?.stopDiagnosticsHeartbeatLoop()
                 self?.logEvent("接收循环失败: \(error.localizedDescription)")
                 self?.finishBroadcastWithError(error)
             }
