@@ -73,10 +73,9 @@ targets:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
         NSExtension:
-          NSExtensionAttributes:
-            RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
           NSExtensionPointIdentifier: com.apple.broadcast-services-upload
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
     entitlements:
       path: BroadcastUploadExtension/BroadcastUploadExtension.entitlements
       properties:
