@@ -11,6 +11,7 @@
 		3A2B8D943F3D4372A7A90001 /* AutomationPackageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A2B8D943F3D4372A7A90002 /* AutomationPackageManager.swift */; };
 		3A2B8D943F3D4372A7A90003 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 3A2B8D943F3D4372A7A90004 /* ZIPFoundation */; };
 		3A2B8D943F3D4372A7A90007 /* AutomationRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A2B8D943F3D4372A7A90008 /* AutomationRunner.swift */; };
+		7F01B45C62A8E2B100D90002 /* RemoteAutomationInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F01B45C62A8E2B100D90001 /* RemoteAutomationInspector.swift */; };
 		9E1BBBBC34D217321B7BC43F /* SignalProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E972055CF287A145732014E /* SignalProbe.swift */; };
 		A053E7419E213615E45D1FA7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3510887441D2C1A692423B76 /* ContentView.swift */; };
 		B000BDC324094B1C7D2A7568 /* SharedStreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B23B99ED4466182E7A740E5 /* SharedStreamConfiguration.swift */; };
@@ -54,6 +55,7 @@
 		4AF067BC4FC27BC25474BF30 /* BroadcastPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastPickerButton.swift; sourceTree = "<group>"; };
 		5C619DD5068AA1FE5923689A /* IOSStreamViewer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IOSStreamViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		717A7BFD9E378005EFD51357 /* BroadcastUploadExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BroadcastUploadExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		7F01B45C62A8E2B100D90001 /* RemoteAutomationInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAutomationInspector.swift; sourceTree = "<group>"; };
 		8B23B99ED4466182E7A740E5 /* SharedStreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedStreamConfiguration.swift; sourceTree = "<group>"; };
 		CC06E2357A43F9C902D3C27A /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
 		F8342D7852CD915F4660913F /* IOSStreamViewerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSStreamViewerApp.swift; sourceTree = "<group>"; };
@@ -84,6 +86,7 @@
 			children = (
 				CC06E2357A43F9C902D3C27A /* SampleHandler.swift */,
 				3A2B8D943F3D4372A7A90008 /* AutomationRunner.swift */,
+				7F01B45C62A8E2B100D90001 /* RemoteAutomationInspector.swift */,
 				8B23B99ED4466182E7A740E5 /* SharedStreamConfiguration.swift */,
 			);
 			name = Sources;
@@ -249,6 +252,7 @@
 			files = (
 				BDF1460A791F19B8FE153136 /* SampleHandler.swift in Sources */,
 				3A2B8D943F3D4372A7A90007 /* AutomationRunner.swift in Sources */,
+				7F01B45C62A8E2B100D90002 /* RemoteAutomationInspector.swift in Sources */,
 				B000BDC324094B1C7D2A7568 /* SharedStreamConfiguration.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -26,6 +26,21 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         }
     }
 
+    private struct PendingAutomationCheckCommand {
+        let sessionID: String
+        let requestID: String
+        let step: AutomationStep
+    }
+
+    private struct PendingAutomationCheckResult {
+        let sessionID: String
+        let requestID: String
+        let stepID: String
+        let status: String
+        let payload: [String: Any]?
+        let error: String?
+    }
+
     private let logger = Logger(subsystem: "IOSStreamViewer", category: "BroadcastUploadExtension")
     private var webSocketSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
@@ -52,6 +67,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private let targetMinBitrateBps = 300_000
     private let minimumSendInterval: TimeInterval = 1.0 / 12.0
     private let isoFormatter = ISO8601DateFormatter()
+    private let automationCommandQueue = DispatchQueue(label: "IOSStreamViewer.BroadcastUploadExtension.RemoteAutomation")
     private lazy var peerConnectionFactory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
         return RTCPeerConnectionFactory(
@@ -65,7 +81,9 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private lazy var screenVideoCapturer = RTCVideoCapturer(delegate: screenVideoSource)
     private var viewerPeers: [String: ViewerPeerState] = [:]
     private var peerConnectionToViewerID: [ObjectIdentifier: String] = [:]
-    private var automationRunner: AutomationRunner?
+    private var remoteAutomationInspector = RemoteAutomationInspector()
+    private var activeAutomationSessionID: String?
+    private var pendingAutomationCheckCommand: PendingAutomationCheckCommand?
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         resetDiagnosticsSession()
@@ -83,7 +101,13 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         }
 
         logEvent("读取配置 server=\(configuration.serverURL) room=\(configuration.roomID) token=\(configuration.token.isEmpty ? "<empty>" : "<set>")")
-        loadAutomationRunner()
+        automationCommandQueue.sync {
+            activeAutomationSessionID = nil
+            pendingAutomationCheckCommand = nil
+            remoteAutomationInspector.stop()
+        }
+        updateAutomationStatus("远程执行模式待命")
+        logEvent("已切换到远程执行模式，等待 server 下发检查命令")
 
         guard let url = buildPublisherURL(configuration: configuration) else {
             let error = NSError(domain: "IOSStreamViewer", code: -2, userInfo: [NSLocalizedDescriptionKey: "服务端地址无效"])
@@ -123,7 +147,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         stopDiagnosticsHeartbeatLoop()
         flushSampleDiagnostics(force: true)
         flushSubmittedFrameDiagnostics(force: true)
-        automationRunner = nil
+        automationCommandQueue.sync {
+            activeAutomationSessionID = nil
+            pendingAutomationCheckCommand = nil
+            remoteAutomationInspector.stop()
+        }
         resetPeerConnections()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
@@ -144,7 +172,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
-        automationRunner?.process(pixelBuffer: pixelBuffer, at: now)
+        processPendingAutomationCheckIfNeeded(pixelBuffer: pixelBuffer)
 
         guard !viewerPeers.isEmpty else {
             if now.timeIntervalSince(lastNoViewerLogAt) >= 5 {
@@ -218,22 +246,6 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         viewerPeers.removeAll()
         peerConnectionToViewerID.removeAll()
-    }
-
-    private func loadAutomationRunner() {
-        do {
-            automationRunner = try AutomationRunner.loadActive { [weak self] event in
-                self?.sendAutomationEvent(event)
-            }
-
-            let summary = automationRunner?.summary ?? "unknown"
-            logEvent("已加载自动化方案: \(summary)")
-            updateAutomationStatus("已加载 \(summary)")
-        } catch {
-            automationRunner = nil
-            logEvent("未加载自动化方案: \(error.localizedDescription)")
-            updateAutomationStatus("未加载自动化方案: \(error.localizedDescription)")
-        }
     }
 
     private func startPeerConnection(for viewerID: String) {
@@ -567,6 +579,216 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         }
     }
 
+    private func sendAutomationResult(
+        sessionID: String,
+        requestID: String,
+        method: String,
+        stepID: String? = nil,
+        status: String,
+        payload: [String: Any]? = nil,
+        error: String? = nil
+    ) {
+        guard let task = webSocketTask else {
+            logEvent("自动化结果发送前置条件不满足")
+            return
+        }
+
+        var message: [String: Any] = [
+            "type": "automation_result",
+            "sessionId": sessionID,
+            "requestId": requestID,
+            "method": method,
+            "status": status
+        ]
+        if let stepID {
+            message["stepId"] = stepID
+        }
+        if let payload {
+            message["payload"] = payload
+        }
+        if let error {
+            message["error"] = error
+        }
+
+        guard let json = makeJSONString(from: message) else {
+            logEvent("自动化结果序列化失败")
+            return
+        }
+
+        task.send(.string(json)) { [weak self] sendError in
+            if let sendError {
+                self?.logEvent("自动化结果发送失败: \(sendError.localizedDescription)")
+                return
+            }
+
+            self?.logEvent("已发送自动化结果: \(method) / \(status) / \(stepID ?? "-")")
+        }
+    }
+
+    private func decodeAutomationStep(from value: Any) throws -> AutomationStep {
+        let data = try JSONSerialization.data(withJSONObject: value, options: [])
+        return try JSONDecoder().decode(AutomationStep.self, from: data)
+    }
+
+    private func handleAutomationCommandMessage(_ json: [String: Any]) {
+        guard let sessionID = json["sessionId"] as? String,
+              let requestID = json["requestId"] as? String,
+              let method = json["method"] as? String
+        else {
+            return
+        }
+
+        let payload = json["payload"] as? [String: Any] ?? [:]
+
+        switch method {
+        case "startCheckItem":
+            automationCommandQueue.sync {
+                activeAutomationSessionID = sessionID
+                pendingAutomationCheckCommand = nil
+                remoteAutomationInspector.start(sessionID: sessionID)
+            }
+            updateAutomationStatus("远程检查会话已启动")
+            logEvent("收到 startCheckItem: \(sessionID)")
+            sendAutomationResult(
+                sessionID: sessionID,
+                requestID: requestID,
+                method: method,
+                status: "ok",
+                payload: payload.isEmpty ? nil : payload
+            )
+        case "StopCheck":
+            automationCommandQueue.sync {
+                if activeAutomationSessionID == sessionID {
+                    activeAutomationSessionID = nil
+                    pendingAutomationCheckCommand = nil
+                }
+                remoteAutomationInspector.stop(sessionID: sessionID)
+            }
+            updateAutomationStatus("远程检查会话已停止")
+            logEvent("收到 StopCheck: \(sessionID)")
+            sendAutomationResult(
+                sessionID: sessionID,
+                requestID: requestID,
+                method: method,
+                status: "ok"
+            )
+        case "checkNextItem":
+            guard let stepValue = payload["step"] else {
+                sendAutomationResult(
+                    sessionID: sessionID,
+                    requestID: requestID,
+                    method: method,
+                    status: "error",
+                    error: "缺少 step 参数"
+                )
+                return
+            }
+
+            let step: AutomationStep
+            do {
+                step = try decodeAutomationStep(from: stepValue)
+            } catch {
+                sendAutomationResult(
+                    sessionID: sessionID,
+                    requestID: requestID,
+                    method: method,
+                    status: "error",
+                    error: "step 解码失败: \(error.localizedDescription)"
+                )
+                return
+            }
+
+            let accepted = automationCommandQueue.sync { () -> Bool in
+                guard activeAutomationSessionID == sessionID else {
+                    return false
+                }
+                pendingAutomationCheckCommand = PendingAutomationCheckCommand(
+                    sessionID: sessionID,
+                    requestID: requestID,
+                    step: step
+                )
+                return true
+            }
+
+            guard accepted else {
+                sendAutomationResult(
+                    sessionID: sessionID,
+                    requestID: requestID,
+                    method: method,
+                    stepID: step.id,
+                    status: "error",
+                    error: "远程检查会话未激活"
+                )
+                return
+            }
+
+            updateAutomationStatus("等待视频帧执行检查: \(step.id)")
+            logEvent("收到 checkNextItem: \(step.id)")
+        default:
+            sendAutomationResult(
+                sessionID: sessionID,
+                requestID: requestID,
+                method: method,
+                status: "error",
+                error: "未知的远程命令: \(method)"
+            )
+        }
+    }
+
+    private func processPendingAutomationCheckIfNeeded(pixelBuffer: CVPixelBuffer) {
+        let result = automationCommandQueue.sync { () -> PendingAutomationCheckResult? in
+            guard let pendingCommand = pendingAutomationCheckCommand else {
+                return nil
+            }
+
+            pendingAutomationCheckCommand = nil
+            do {
+                let payload = try remoteAutomationInspector.evaluate(
+                    step: pendingCommand.step,
+                    sessionID: pendingCommand.sessionID,
+                    pixelBuffer: pixelBuffer
+                )
+                return PendingAutomationCheckResult(
+                    sessionID: pendingCommand.sessionID,
+                    requestID: pendingCommand.requestID,
+                    stepID: pendingCommand.step.id,
+                    status: "ok",
+                    payload: payload,
+                    error: nil
+                )
+            } catch {
+                return PendingAutomationCheckResult(
+                    sessionID: pendingCommand.sessionID,
+                    requestID: pendingCommand.requestID,
+                    stepID: pendingCommand.step.id,
+                    status: "error",
+                    payload: nil,
+                    error: error.localizedDescription
+                )
+            }
+        }
+
+        guard let result else {
+            return
+        }
+
+        if result.status == "ok" {
+            updateAutomationStatus("已返回检查结果: \(result.stepID)")
+        } else {
+            updateAutomationStatus("检查失败: \(result.error ?? result.stepID)")
+        }
+
+        sendAutomationResult(
+            sessionID: result.sessionID,
+            requestID: result.requestID,
+            method: "checkNextItem",
+            stepID: result.stepID,
+            status: result.status,
+            payload: result.payload,
+            error: result.error
+        )
+    }
+
     private func startWebSocketPingLoop(for task: URLSessionWebSocketTask) {
         stopWebSocketPingLoop()
 
@@ -854,6 +1076,9 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             updateDiagnostics(status: "服务端警告", error: warning)
             logger.warning("Server warning: \(warning, privacy: .public)")
             logEvent("服务端警告: \(warning)")
+        case "automation_command":
+            logEvent("收到远程自动化命令: \((json["method"] as? String) ?? "unknown")")
+            handleAutomationCommandMessage(json)
         case "error":
             let errorMessage = json["message"] as? String ?? "未知错误"
             updateDiagnostics(status: "服务端返回错误", error: errorMessage)

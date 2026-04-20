@@ -75,25 +75,27 @@ open IOSStreamViewer.xcodeproj
 
 ## 5. 自动化方案流程
 
-浏览器首页现在也是自动化方案编辑器：
+浏览器首页现在同时承担方案编辑和远程执行入口：
 
 1. 连接同一个房间并看到 iOS 画面。
 2. 在“方案编辑”里添加 `waitForText`、`waitForImage`、`tap`、`drag` 动作。
 3. 图片识别可以上传 PNG，也可以从当前视频帧按归一化区域截取模板。
-4. 点击“保存并发布 ZIP”，服务端会保存 `automation.json` 和 `images/`，并生成可下载 ZIP。
-5. iOS 主 App 的“自动化方案”区域填写 Package ID，点击下载并设为 active package。
-6. 下一次启动 Broadcast Extension 时，会从 App Group 读取本地 active package，用 ReplayKit 帧做本地识别，并把 tap/drag 命令先发送回网页显示。
-
-第一版不会注入真实系统触摸，也不会直接控制硬件；网页上显示的点击点和拖拽轨迹就是后续硬件控制层要消费的归一化坐标。
+4. 点击“保存并发布 ZIP”，服务端会保存 `automation.json` 和 `images/`。
+5. 在“方案执行”里选择 package 和 revision，点击“开始执行”。
+6. 服务端会按步骤编排流程：
+	- 对 `waitForText`、`waitForImage`，通过 WebSocket 向 iOS Broadcast Extension 下发 `startCheckItem`、`checkNextItem`、`StopCheck` 等命令。
+	- iOS 端只返回 OCR 候选结果或图片匹配结果，不再在手机本地推进整条步骤逻辑。
+	- 服务端根据返回的基础数据完成匹配、变量保存、步骤推进和超时控制。
+7. 对 `tap`、`drag` 这类交互命令，第一版只打印在服务端控制台和浏览器控制台，不做真实触控注入。
 
 ## 6. 当前实现说明
 
-这是一个为了尽快跑通 WebRTC 链路的版本：
+这是一个以“远程编排”为主的演示版本：
 
-- 服务端不再中继图像帧，只负责房间管理、鉴权和 WebRTC 信令转发。
-- 实际承载仍然是 JPEG 帧，但它们现在走的是 WebRTC DataChannel。
-- 优点是改造量小，先把传输层切到 WebRTC，便于继续向真正的视频轨演进。
-- 缺点是带宽和流畅度仍然受 JPEG 编码限制，尚未切换到 H.264/VP8 等实时视频编码。
+- 服务端负责房间管理、鉴权、WebRTC 信令转发，以及自动化流程编排。
+- iOS Broadcast Extension 保留视频推流与基础检查原语，按 server 命令执行 OCR 或图片匹配。
+- Web 前端可以选择方案并开始、停止执行，同时继续保留编辑和发布 ZIP 的能力。
+- 真实点击、拖拽注入尚未接入，当前只打印命令，便于先把协议和调度链路跑通。
 
 如果你后续要升级为生产可用版本，建议下一步替换为：
 

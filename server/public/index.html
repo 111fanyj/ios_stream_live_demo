@@ -551,6 +551,28 @@
 
         <aside class="panel">
           <h2>方案编辑</h2>
+          <section>
+            <div class="section-title">
+              <h3>方案执行</h3>
+              <button id="refreshPackagesButton" class="secondary" type="button">刷新方案</button>
+            </div>
+            <div class="row">
+              <label>
+                可用方案
+                <select id="executionPackageSelect"></select>
+              </label>
+              <label>
+                Revision
+                <select id="executionRevisionSelect"></select>
+              </label>
+            </div>
+            <div class="row">
+              <button id="startExecutionButton" type="button">开始执行</button>
+              <button id="stopExecutionButton" class="secondary" type="button">停止执行</button>
+            </div>
+            <div id="executionResult" class="meta">未开始执行</div>
+          </section>
+
           <div class="row">
             <label>
               Package ID
@@ -752,6 +774,12 @@
 
       const packageIdInput = document.getElementById('packageIdInput');
       const packageNameInput = document.getElementById('packageNameInput');
+      const refreshPackagesButton = document.getElementById('refreshPackagesButton');
+      const executionPackageSelect = document.getElementById('executionPackageSelect');
+      const executionRevisionSelect = document.getElementById('executionRevisionSelect');
+      const startExecutionButton = document.getElementById('startExecutionButton');
+      const stopExecutionButton = document.getElementById('stopExecutionButton');
+      const executionResult = document.getElementById('executionResult');
       const stepTypeInput = document.getElementById('stepTypeInput');
       const stepIdInput = document.getElementById('stepIdInput');
       const waitFields = document.getElementById('waitFields');
@@ -801,6 +829,9 @@
       let steps = [];
       let assets = [];
       let cropDrag = null;
+      let executionPackages = [];
+      let activeExecutionSessionId = null;
+      let isExecutionRunning = false;
 
       serverUrlInput.value = window.location.origin;
 
@@ -980,6 +1011,19 @@
         if (token) {
           url.searchParams.set('token', token);
         }
+        return url;
+      }
+
+      function buildApiUrl(baseUrl, pathname) {
+        const url = new URL(baseUrl || window.location.origin);
+        if (url.protocol === 'ws:') {
+          url.protocol = 'http:';
+        }
+        if (url.protocol === 'wss:') {
+          url.protocol = 'https:';
+        }
+        url.pathname = pathname;
+        url.search = '';
         return url;
       }
 
@@ -1210,6 +1254,160 @@
         jsonPreview.value = JSON.stringify(makeAutomationJSON(), null, 2);
       }
 
+      function getSelectedExecutionPackage() {
+        return executionPackages.find((item) => item.packageId === executionPackageSelect.value) || null;
+      }
+
+      function updateExecutionControls() {
+        const hasSocket = signalingSocket && signalingSocket.readyState === WebSocket.OPEN;
+        const hasPackage = Boolean(executionPackageSelect.value);
+        const hasRevision = Boolean(executionRevisionSelect.value);
+        startExecutionButton.disabled = !hasSocket || !hasPackage || !hasRevision || isExecutionRunning;
+        stopExecutionButton.disabled = !hasSocket || !isExecutionRunning;
+      }
+
+      function renderExecutionRevisions() {
+        const selectedPackage = getSelectedExecutionPackage();
+        executionRevisionSelect.innerHTML = '';
+
+        if (!selectedPackage || !Array.isArray(selectedPackage.revisions) || selectedPackage.revisions.length === 0) {
+          const option = document.createElement('option');
+          option.value = '';
+          option.textContent = '无可用 revision';
+          executionRevisionSelect.append(option);
+          updateExecutionControls();
+          return;
+        }
+
+        const revisions = [...selectedPackage.revisions].sort((first, second) => second.revision - first.revision);
+        for (const revision of revisions) {
+          const option = document.createElement('option');
+          option.value = String(revision.revision);
+          option.textContent = `r${revision.revision} / ${revision.stepCount} steps / ${revision.imageCount} images`;
+          if (revision.revision === selectedPackage.activeRevision || revision.revision === selectedPackage.latestRevision) {
+            option.selected = true;
+          }
+          executionRevisionSelect.append(option);
+        }
+
+        updateExecutionControls();
+      }
+
+      function renderExecutionPackages() {
+        executionPackageSelect.innerHTML = '';
+
+        if (executionPackages.length === 0) {
+          const option = document.createElement('option');
+          option.value = '';
+          option.textContent = '暂无方案';
+          executionPackageSelect.append(option);
+          renderExecutionRevisions();
+          return;
+        }
+
+        for (const item of executionPackages) {
+          const option = document.createElement('option');
+          option.value = item.packageId;
+          option.textContent = `${item.packageId} / ${item.name}`;
+          executionPackageSelect.append(option);
+        }
+
+        renderExecutionRevisions();
+      }
+
+      async function loadExecutionPackages() {
+        refreshPackagesButton.disabled = true;
+        executionResult.textContent = '正在读取方案列表...';
+        try {
+          const response = await fetch(buildApiUrl(serverUrlInput.value.trim() || window.location.origin, '/api/automation/packages'));
+          const result = await response.json();
+          if (!response.ok) {
+            throw new Error(result.error || '读取方案失败');
+          }
+
+          executionPackages = Array.isArray(result.packages) ? result.packages : [];
+          executionPackages.sort((first, second) => first.packageId.localeCompare(second.packageId));
+          renderExecutionPackages();
+          executionResult.textContent = executionPackages.length > 0
+            ? `已加载 ${executionPackages.length} 个方案`
+            : '服务端暂无可执行方案';
+        } catch (error) {
+          executionPackages = [];
+          renderExecutionPackages();
+          executionResult.textContent = `读取方案失败: ${error.message}`;
+        } finally {
+          refreshPackagesButton.disabled = false;
+          updateExecutionControls();
+        }
+      }
+
+      function handleAutomationStatus(message) {
+        console.log('[automation_status]', message);
+        if (message.sessionId) {
+          activeExecutionSessionId = message.sessionId;
+        }
+
+        if (['starting', 'running', 'polling', 'matched'].includes(message.status)) {
+          isExecutionRunning = true;
+        }
+        if (['stopped', 'completed', 'error'].includes(message.status)) {
+          isExecutionRunning = false;
+        }
+
+        const summary = `${message.status || 'unknown'} ${message.stepId || ''} ${message.message || ''}`.trim();
+        executionResult.textContent = summary || '执行状态已更新';
+        automationState.textContent = summary || '远程执行中';
+        pushAutomationLine(`[server] ${summary}`.trim());
+        updateExecutionControls();
+      }
+
+      function handleAutomationAction(message) {
+        console.log('[automation_action]', message);
+        const summary = `${message.action || 'action'} ${message.stepId || ''}`.trim();
+        pushAutomationLine(`[action] ${summary}`);
+      }
+
+      function startExecution() {
+        if (!signalingSocket || signalingSocket.readyState !== WebSocket.OPEN) {
+          executionResult.textContent = '请先连接查看端';
+          updateExecutionControls();
+          return;
+        }
+
+        const packageId = executionPackageSelect.value;
+        const revision = Number(executionRevisionSelect.value);
+        if (!packageId || !Number.isInteger(revision) || revision < 1) {
+          executionResult.textContent = '请选择有效的方案和 revision';
+          updateExecutionControls();
+          return;
+        }
+
+        signalingSocket.send(JSON.stringify({
+          type: 'automation_start',
+          packageId,
+          revision,
+        }));
+        console.log('[automation_start]', { packageId, revision });
+        executionResult.textContent = `已发送开始执行: ${packageId} r${revision}`;
+        updateExecutionControls();
+      }
+
+      function stopExecution() {
+        if (!signalingSocket || signalingSocket.readyState !== WebSocket.OPEN) {
+          executionResult.textContent = '当前没有活动连接';
+          updateExecutionControls();
+          return;
+        }
+
+        signalingSocket.send(JSON.stringify({
+          type: 'automation_stop',
+          sessionId: activeExecutionSessionId,
+        }));
+        console.log('[automation_stop]', { sessionId: activeExecutionSessionId });
+        executionResult.textContent = '已发送停止执行';
+        updateExecutionControls();
+      }
+
       function updateStepFields() {
         const type = stepTypeInput.value;
         waitFields.hidden = !(type === 'waitForText' || type === 'waitForImage');
@@ -1367,7 +1565,7 @@
         publishButton.disabled = true;
         publishResult.textContent = '正在保存 ZIP...';
         try {
-          const response = await fetch('/api/automation/packages', {
+          const response = await fetch(buildApiUrl(serverUrlInput.value.trim() || window.location.origin, '/api/automation/packages'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ automation, images: assets }),
@@ -1377,6 +1575,7 @@
             throw new Error(result.error || '保存失败');
           }
           publishResult.innerHTML = `已发布 ${result.revision.packageId || automation.packageId} r${result.revision.revision}<br>${result.revision.downloadUrl}`;
+          loadExecutionPackages();
         } catch (error) {
           publishResult.textContent = `保存失败: ${error.message}`;
         } finally {
@@ -1471,6 +1670,8 @@
         signalingSocket.onopen = () => {
           setConnectionText('信令已连接');
           pushLog('Signaling WebSocket 已打开');
+          updateExecutionControls();
+          loadExecutionPackages();
         };
 
         signalingSocket.onmessage = async (event) => {
@@ -1484,6 +1685,16 @@
 
           if (message.type === 'automation_event') {
             handleAutomationEvent(message.event || {});
+            return;
+          }
+
+          if (message.type === 'automation_status') {
+            handleAutomationStatus(message);
+            return;
+          }
+
+          if (message.type === 'automation_action') {
+            handleAutomationAction(message);
             return;
           }
 
@@ -1555,11 +1766,19 @@
           setConnectionText('已断开');
           setPublisherState('未检测到');
           setLiveState(false);
+          activeExecutionSessionId = null;
+          isExecutionRunning = false;
+          updateExecutionControls();
           pushLog('Signaling WebSocket 已断开');
         };
       });
 
       stepTypeInput.addEventListener('change', updateStepFields);
+      executionPackageSelect.addEventListener('change', renderExecutionRevisions);
+      executionRevisionSelect.addEventListener('change', updateExecutionControls);
+      refreshPackagesButton.addEventListener('click', loadExecutionPackages);
+      startExecutionButton.addEventListener('click', startExecution);
+      stopExecutionButton.addEventListener('click', stopExecution);
       toggleConnectionButton.addEventListener('click', () => {
         setConnectionCollapsed(!connectionPanel.hidden);
       });
@@ -1641,6 +1860,9 @@
       updateStepFields();
       updateCropBoxFromInputs();
       renderEditor();
+      renderExecutionPackages();
+      updateExecutionControls();
+      loadExecutionPackages();
     </script>
   </body>
 </html>

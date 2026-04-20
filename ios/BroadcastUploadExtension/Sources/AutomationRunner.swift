@@ -43,6 +43,7 @@ struct AutomationStep: Codable {
     let to: AutomationTarget?
     let holdMs: Int?
     let durationMs: Int?
+    let imageDataURL: String?
 }
 
 struct AutomationDocument: Codable {

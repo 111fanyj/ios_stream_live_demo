@@ -12,10 +12,18 @@ const wss = new WebSocketServer({ server });
 const port = Number(process.env.PORT || 3000);
 const automationRoot = path.join(__dirname, 'data', 'automation');
 const rooms = new Map();
+const automationSessions = new Map();
 let nextClientId = 1;
+let nextAutomationSequence = 1;
 
 function log(...parts) {
   console.log(new Date().toISOString(), ...parts);
+}
+
+function makeStatusError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 function summarizeSignal(signal) {
@@ -123,6 +131,214 @@ function safeSend(ws, payload) {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload));
   }
+}
+
+function isClientOpen(ws) {
+  return Boolean(ws && ws.readyState === WebSocket.OPEN);
+}
+
+function sendToPublisher(roomId, payload) {
+  const publisher = getRoom(roomId).publisher;
+  if (!isClientOpen(publisher)) {
+    return false;
+  }
+
+  publisher.send(JSON.stringify(payload));
+  return true;
+}
+
+function makeAutomationId(prefix) {
+  const sequence = nextAutomationSequence;
+  nextAutomationSequence += 1;
+  return `${prefix}-${Date.now().toString(36)}-${sequence.toString(36)}`;
+}
+
+function normalizePoint(point) {
+  if (!point || typeof point !== 'object') {
+    return null;
+  }
+
+  const x = Number(point.x);
+  const y = Number(point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+
+  return {
+    x: Math.max(0, Math.min(1, x)),
+    y: Math.max(0, Math.min(1, y))
+  };
+}
+
+function regionContainsPoint(region, point) {
+  if (!region) {
+    return true;
+  }
+
+  const normalized = normalizePoint(point);
+  if (!normalized) {
+    return false;
+  }
+
+  const regionX = Number(region.x ?? 0);
+  const regionY = Number(region.y ?? 0);
+  const regionWidth = Number(region.width ?? 0);
+  const regionHeight = Number(region.height ?? 0);
+  return normalized.x >= regionX &&
+    normalized.x <= regionX + regionWidth &&
+    normalized.y >= regionY &&
+    normalized.y <= regionY + regionHeight;
+}
+
+function matchesText(text, query, mode) {
+  const rawText = String(text || '').trim();
+  const rawQuery = String(query || '').trim();
+  if (!rawText || !rawQuery) {
+    return false;
+  }
+
+  const value = rawText.toLocaleLowerCase();
+  const expected = rawQuery.toLocaleLowerCase();
+  if (mode === 'equals') {
+    return value === expected;
+  }
+
+  return value.includes(expected);
+}
+
+function resolveAutomationTarget(session, target) {
+  if (!target || typeof target !== 'object') {
+    return null;
+  }
+
+  if (typeof target.ref === 'string' && target.ref) {
+    return normalizePoint(session.variables[target.ref]);
+  }
+
+  return normalizePoint(target);
+}
+
+function collectImageAssetIds(steps) {
+  const assetIds = new Set();
+  for (const step of steps) {
+    if (step?.type === 'waitForImage' && typeof step.assetId === 'string' && step.assetId) {
+      assetIds.add(step.assetId);
+    }
+  }
+  return Array.from(assetIds.values());
+}
+
+function getAutomationSession(roomId, sessionId) {
+  const session = automationSessions.get(roomId);
+  if (!session) {
+    return null;
+  }
+
+  if (sessionId && session.sessionId !== sessionId) {
+    return null;
+  }
+
+  return session;
+}
+
+function clearAutomationTimer(session) {
+  if (session?.timer) {
+    clearTimeout(session.timer);
+    session.timer = null;
+  }
+}
+
+function clearPendingCommand(session) {
+  if (session?.pendingCommand?.timeoutHandle) {
+    clearTimeout(session.pendingCommand.timeoutHandle);
+  }
+  if (session) {
+    session.pendingCommand = null;
+  }
+}
+
+function broadcastAutomationPayload(roomId, payload) {
+  const room = getRoom(roomId);
+  for (const viewer of room.viewers.values()) {
+    safeSend(viewer, payload);
+  }
+
+  for (const probe of room.probes.values()) {
+    safeSend(probe, payload);
+  }
+}
+
+function buildAutomationStatusPayload(session, status, message, extra = {}) {
+  return {
+    type: 'automation_status',
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    ownerViewerId: session.ownerViewerId,
+    packageId: session.packageId,
+    revision: session.revision,
+    status,
+    message,
+    stepId: extra.stepId ?? null,
+    currentStepIndex: session.currentStepIndex,
+    currentStepNumber: Math.min(session.currentStepIndex + 1, session.document.steps.length),
+    stepCount: session.document.steps.length,
+    detail: extra.detail
+  };
+}
+
+function broadcastAutomationStatus(session, status, message, extra = {}) {
+  const payload = buildAutomationStatusPayload(session, status, message, extra);
+  broadcastAutomationPayload(session.roomId, payload);
+  log('automation_status', {
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    status,
+    message,
+    stepId: extra.stepId ?? null,
+    currentStepIndex: session.currentStepIndex,
+    stepCount: session.document.steps.length
+  });
+}
+
+function broadcastAutomationStatusSnapshot(roomId, payload) {
+  broadcastAutomationPayload(roomId, {
+    type: 'automation_status',
+    roomId,
+    sessionId: payload.sessionId ?? null,
+    ownerViewerId: payload.ownerViewerId ?? null,
+    packageId: payload.packageId ?? null,
+    revision: payload.revision ?? null,
+    status: payload.status,
+    message: payload.message,
+    stepId: payload.stepId ?? null,
+    currentStepIndex: payload.currentStepIndex ?? 0,
+    currentStepNumber: payload.currentStepNumber ?? 0,
+    stepCount: payload.stepCount ?? 0,
+    detail: payload.detail
+  });
+}
+
+function broadcastAutomationAction(session, step, action, command) {
+  const payload = {
+    type: 'automation_action',
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    ownerViewerId: session.ownerViewerId,
+    packageId: session.packageId,
+    revision: session.revision,
+    stepId: step.id,
+    action,
+    command
+  };
+
+  broadcastAutomationPayload(session.roomId, payload);
+  log('automation_action', {
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    action,
+    stepId: step.id,
+    command
+  });
 }
 
 function sanitizePackageId(packageId) {
@@ -304,6 +520,486 @@ async function saveAutomationPackage(body) {
 
   await writeJSON(metadataPath(automation.packageId), nextMetadata);
   return revisionEntry;
+}
+
+async function loadAutomationBundle(packageId, requestedRevision) {
+  const metadata = await readPackageMetadata(packageId);
+  if (metadata.latestRevision === 0) {
+    throw makeStatusError('Package not found', 404);
+  }
+
+  const revision = requestedRevision == null
+    ? Number(metadata.activeRevision || metadata.latestRevision)
+    : Number(requestedRevision);
+  if (!Number.isInteger(revision) || revision < 1) {
+    throw makeStatusError('Invalid revision', 400);
+  }
+
+  if (!metadata.revisions.some((entry) => entry.revision === revision)) {
+    throw makeStatusError('Revision not found', 404);
+  }
+
+  const dir = revisionDirectory(packageId, revision);
+  const document = await readJSON(path.join(dir, 'automation.json'));
+  if (!document || !Array.isArray(document.steps)) {
+    throw makeStatusError('automation.json is missing or invalid', 500);
+  }
+
+  const imageAssets = {};
+  for (const assetId of collectImageAssetIds(document.steps)) {
+    const imagePath = path.join(dir, 'images', `${assetId}.png`);
+    try {
+      const imageData = await fs.readFile(imagePath);
+      imageAssets[assetId] = `data:image/png;base64,${imageData.toString('base64')}`;
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        throw makeStatusError(`Missing image asset: ${assetId}`, 500);
+      }
+      throw error;
+    }
+  }
+
+  return { document, imageAssets, metadata, revision };
+}
+
+function scheduleAutomationStep(session, delayMs) {
+  clearAutomationTimer(session);
+  session.timer = setTimeout(() => {
+    const activeSession = getAutomationSession(session.roomId, session.sessionId);
+    if (!activeSession) {
+      return;
+    }
+
+    try {
+      executeAutomationStep(activeSession);
+    } catch (error) {
+      finalizeAutomationSession(activeSession.roomId, 'error', error.message || '执行步骤失败', {
+        stepId: activeSession.document.steps[activeSession.currentStepIndex]?.id ?? null
+      });
+    }
+  }, Math.max(0, delayMs));
+}
+
+function dispatchAutomationCommand(session, method, payload, options = {}) {
+  const requestId = makeAutomationId('automation-request');
+  const timeoutMs = Math.max(1_000, Number(options.timeoutMs) || 12_000);
+  const command = {
+    type: 'automation_command',
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    requestId,
+    method,
+    packageId: session.packageId,
+    revision: session.revision,
+    stepId: options.stepId ?? null,
+    payload
+  };
+
+  clearPendingCommand(session);
+  if (!sendToPublisher(session.roomId, command)) {
+    throw makeStatusError('Publisher is unavailable', 409);
+  }
+
+  const timeoutHandle = setTimeout(() => {
+    const activeSession = getAutomationSession(session.roomId, session.sessionId);
+    if (!activeSession || activeSession.pendingCommand?.requestId !== requestId) {
+      return;
+    }
+
+    finalizeAutomationSession(activeSession.roomId, 'error', `方法 ${method} 超时`, {
+      stepId: options.stepId ?? null,
+      sendStopCommand: false
+    });
+  }, timeoutMs);
+
+  session.pendingCommand = {
+    requestId,
+    method,
+    stepId: options.stepId ?? null,
+    timeoutHandle
+  };
+
+  log('automation_command_dispatched', {
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    method,
+    requestId,
+    stepId: options.stepId ?? null
+  });
+}
+
+function finalizeAutomationSession(roomId, status, message, options = {}) {
+  const session = automationSessions.get(roomId);
+  if (!session) {
+    return;
+  }
+
+  clearAutomationTimer(session);
+  clearPendingCommand(session);
+  automationSessions.delete(roomId);
+
+  if (options.sendStopCommand !== false) {
+    sendToPublisher(roomId, {
+      type: 'automation_command',
+      roomId,
+      sessionId: session.sessionId,
+      requestId: makeAutomationId('automation-request'),
+      method: 'StopCheck',
+      packageId: session.packageId,
+      revision: session.revision,
+      stepId: options.stepId ?? null,
+      payload: {
+        reason: message
+      }
+    });
+  }
+
+  broadcastAutomationStatus(session, status, message, {
+    stepId: options.stepId ?? null,
+    detail: options.detail
+  });
+}
+
+function buildCheckStepPayload(session, step) {
+  const payloadStep = {
+    ...step
+  };
+
+  if (step.type === 'waitForImage') {
+    const imageDataURL = session.imageAssets[step.assetId];
+    if (!imageDataURL) {
+      throw makeStatusError(`Image asset is unavailable: ${step.assetId || 'unknown'}`, 500);
+    }
+    payloadStep.imageDataURL = imageDataURL;
+  }
+
+  return payloadStep;
+}
+
+function selectTextMatch(step, payload) {
+  const candidates = Array.isArray(payload?.ocrCandidates) ? payload.ocrCandidates : [];
+  for (const candidate of candidates) {
+    if (!matchesText(candidate?.text, step.query, step.match || 'contains')) {
+      continue;
+    }
+
+    const point = normalizePoint(candidate?.point);
+    if (!point || !regionContainsPoint(step.region, point)) {
+      continue;
+    }
+
+    return {
+      point,
+      text: String(candidate.text || ''),
+      confidence: Number(candidate.confidence) || 0
+    };
+  }
+
+  return null;
+}
+
+function selectImageMatch(step, payload) {
+  const match = payload?.bestImageMatch;
+  if (!match || typeof match !== 'object') {
+    return null;
+  }
+
+  const point = normalizePoint(match.point);
+  const score = Number(match.score);
+  if (!point || !Number.isFinite(score)) {
+    return null;
+  }
+
+  if (!regionContainsPoint(step.region, point)) {
+    return null;
+  }
+
+  const threshold = Number(step.threshold ?? 0.84);
+  if (score < threshold) {
+    return null;
+  }
+
+  return { point, score };
+}
+
+function handleCheckNextItemResult(session, payload, responseStepId) {
+  const step = session.document.steps[session.currentStepIndex];
+  if (!step) {
+    finalizeAutomationSession(session.roomId, 'completed', '自动化流程完成');
+    return;
+  }
+
+  if (responseStepId && responseStepId !== step.id) {
+    throw makeStatusError(`检查结果与当前步骤不一致: expected ${step.id}, received ${responseStepId}`, 409);
+  }
+
+  const waitState = session.waitState && session.waitState.stepId === step.id
+    ? session.waitState
+    : { stepId: step.id, startedAt: Date.now(), attempts: 0 };
+  session.waitState = waitState;
+
+  let matched = null;
+  if (step.type === 'waitForText') {
+    matched = selectTextMatch(step, payload);
+  } else if (step.type === 'waitForImage') {
+    matched = selectImageMatch(step, payload);
+  } else {
+    throw makeStatusError(`Unsupported wait step type: ${step.type}`, 400);
+  }
+
+  if (matched) {
+    if (step.saveAs) {
+      session.variables[step.saveAs] = matched.point;
+    }
+
+    broadcastAutomationStatus(session, 'matched', `命中步骤 ${step.id}`, {
+      stepId: step.id,
+      detail: matched
+    });
+    session.currentStepIndex += 1;
+    session.waitState = null;
+    scheduleAutomationStep(session, 0);
+    return;
+  }
+
+  const timeoutMs = Number(step.timeoutMs) || 10_000;
+  const pollIntervalMs = Number(step.pollIntervalMs) || 500;
+  const elapsedMs = Date.now() - waitState.startedAt;
+  if (elapsedMs >= timeoutMs) {
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 等待超时`, {
+      stepId: step.id,
+      detail: {
+        elapsedMs,
+        timeoutMs
+      }
+    });
+    return;
+  }
+
+  broadcastAutomationStatus(session, 'polling', `步骤 ${step.id} 未命中，继续检查`, {
+    stepId: step.id,
+    detail: {
+      attempts: waitState.attempts,
+      elapsedMs,
+      payload
+    }
+  });
+  scheduleAutomationStep(session, pollIntervalMs);
+}
+
+function executeAutomationStep(session) {
+  if (session.pendingCommand) {
+    return;
+  }
+
+  if (!isClientOpen(getRoom(session.roomId).publisher)) {
+    finalizeAutomationSession(session.roomId, 'error', 'Publisher 已断开', {
+      sendStopCommand: false
+    });
+    return;
+  }
+
+  if (session.currentStepIndex >= session.document.steps.length) {
+    finalizeAutomationSession(session.roomId, 'completed', '自动化流程完成');
+    return;
+  }
+
+  const step = session.document.steps[session.currentStepIndex];
+  if (!step || typeof step.type !== 'string') {
+    throw makeStatusError(`Invalid automation step at index ${session.currentStepIndex}`, 500);
+  }
+
+  if (step.type === 'tap') {
+    const point = resolveAutomationTarget(session, step.target);
+    if (!point) {
+      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标不存在`, {
+        stepId: step.id
+      });
+      return;
+    }
+
+    console.log('[automation_action]', JSON.stringify({
+      sessionId: session.sessionId,
+      stepId: step.id,
+      action: 'tap',
+      point
+    }));
+    broadcastAutomationAction(session, step, 'tap', { point });
+    session.currentStepIndex += 1;
+    scheduleAutomationStep(session, 0);
+    return;
+  }
+
+  if (step.type === 'drag') {
+    const from = resolveAutomationTarget(session, step.from);
+    const to = resolveAutomationTarget(session, step.to);
+    if (!from || !to) {
+      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标不存在`, {
+        stepId: step.id
+      });
+      return;
+    }
+
+    const command = {
+      from,
+      to,
+      holdMs: Number(step.holdMs) || 120,
+      durationMs: Number(step.durationMs) || 450
+    };
+    console.log('[automation_action]', JSON.stringify({
+      sessionId: session.sessionId,
+      stepId: step.id,
+      action: 'drag',
+      ...command
+    }));
+    broadcastAutomationAction(session, step, 'drag', command);
+    session.currentStepIndex += 1;
+    scheduleAutomationStep(session, 0);
+    return;
+  }
+
+  if (step.type !== 'waitForText' && step.type !== 'waitForImage') {
+    finalizeAutomationSession(session.roomId, 'error', `不支持的步骤类型: ${step.type}`, {
+      stepId: step.id,
+      sendStopCommand: false
+    });
+    return;
+  }
+
+  if (!session.waitState || session.waitState.stepId !== step.id) {
+    session.waitState = {
+      stepId: step.id,
+      startedAt: Date.now(),
+      attempts: 0
+    };
+  }
+
+  session.waitState.attempts += 1;
+  const elapsedMs = Date.now() - session.waitState.startedAt;
+  const timeoutMs = Number(step.timeoutMs) || 10_000;
+  if (elapsedMs >= timeoutMs) {
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 等待超时`, {
+      stepId: step.id,
+      detail: {
+        attempts: session.waitState.attempts,
+        elapsedMs,
+        timeoutMs
+      }
+    });
+    return;
+  }
+
+  const payload = {
+    step: buildCheckStepPayload(session, step),
+    attempt: session.waitState.attempts
+  };
+  broadcastAutomationStatus(session, 'polling', `正在检查步骤 ${step.id}`, {
+    stepId: step.id,
+    detail: {
+      attempts: session.waitState.attempts,
+      elapsedMs
+    }
+  });
+  dispatchAutomationCommand(session, 'checkNextItem', payload, {
+    stepId: step.id,
+    timeoutMs: Math.max(5_000, Number(step.pollIntervalMs) || 5000)
+  });
+}
+
+async function startAutomationSession(roomId, viewer, packageId, revision) {
+  const room = getRoom(roomId);
+  if (!isClientOpen(room.publisher)) {
+    throw makeStatusError('当前房间没有可用的 publisher', 409);
+  }
+
+  const bundle = await loadAutomationBundle(packageId, revision);
+
+  if (automationSessions.has(roomId)) {
+    finalizeAutomationSession(roomId, 'stopped', '被新的执行请求替换');
+  }
+
+  const session = {
+    sessionId: makeAutomationId('automation-session'),
+    roomId,
+    ownerViewerId: viewer.clientId,
+    packageId: bundle.document.packageId,
+    revision: bundle.revision,
+    document: bundle.document,
+    imageAssets: bundle.imageAssets,
+    variables: {},
+    currentStepIndex: 0,
+    waitState: null,
+    pendingCommand: null,
+    timer: null,
+    createdAt: new Date().toISOString()
+  };
+
+  automationSessions.set(roomId, session);
+  broadcastAutomationStatus(session, 'starting', `准备启动 ${session.packageId} r${session.revision}`);
+  dispatchAutomationCommand(session, 'startCheckItem', {
+    packageId: session.packageId,
+    revision: session.revision,
+    stepCount: session.document.steps.length
+  }, {
+    timeoutMs: 10_000
+  });
+
+  return session;
+}
+
+function stopAutomationSession(roomId, reason = '用户停止执行') {
+  if (!automationSessions.has(roomId)) {
+    return false;
+  }
+
+  finalizeAutomationSession(roomId, 'stopped', reason);
+  return true;
+}
+
+function handleAutomationResult(roomId, message) {
+  const session = getAutomationSession(roomId, message.sessionId);
+  if (!session) {
+    log('automation_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      requestId: message.requestId,
+      method: message.method,
+      reason: 'session_not_found'
+    });
+    return;
+  }
+
+  const pendingCommand = session.pendingCommand;
+  if (!pendingCommand || pendingCommand.requestId !== message.requestId || pendingCommand.method !== message.method) {
+    log('automation_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      requestId: message.requestId,
+      method: message.method,
+      reason: 'request_mismatch'
+    });
+    return;
+  }
+
+  clearPendingCommand(session);
+
+  if (message.status !== 'ok') {
+    finalizeAutomationSession(session.roomId, 'error', message.error || `方法 ${message.method} 执行失败`, {
+      stepId: message.stepId || pendingCommand.stepId || null,
+      sendStopCommand: false
+    });
+    return;
+  }
+
+  if (message.method === 'startCheckItem') {
+    broadcastAutomationStatus(session, 'running', '远程检查会话已启动');
+    scheduleAutomationStep(session, 0);
+    return;
+  }
+
+  if (message.method === 'checkNextItem') {
+    handleCheckNextItemResult(session, message.payload || {}, message.stepId || pendingCommand.stepId || null);
+  }
 }
 
 function broadcastAutomationEvent(roomId, source, event) {
@@ -537,7 +1233,7 @@ wss.on('connection', (ws, req) => {
     broadcastRoomState(roomId);
   }
 
-  ws.on('message', (rawMessage) => {
+  ws.on('message', async (rawMessage) => {
     log('message_received', {
       clientType: ws.clientType,
       roomId: ws.roomId,
@@ -572,6 +1268,77 @@ wss.on('connection', (ws, req) => {
       }
 
       broadcastAutomationEvent(ws.roomId, ws, message.event || {});
+      return;
+    }
+
+    if (message.type === 'automation_result') {
+      if (ws.clientType !== 'publisher') {
+        log('automation_result_rejected', {
+          roomId: ws.roomId,
+          clientId: ws.clientId,
+          clientType: ws.clientType,
+          reason: 'publisher_only'
+        });
+        safeSend(ws, { type: 'error', message: 'Only publisher clients can send automation results' });
+        return;
+      }
+
+      handleAutomationResult(ws.roomId, message);
+      return;
+    }
+
+    if (message.type === 'automation_start') {
+      if (ws.clientType !== 'viewer') {
+        safeSend(ws, { type: 'warning', message: 'Only viewer clients can start automation' });
+        return;
+      }
+
+      const packageId = sanitizePackageId(message.packageId);
+      const revision = message.revision == null ? null : Number(message.revision);
+      if (!packageId || (message.revision != null && (!Number.isInteger(revision) || revision < 1))) {
+        broadcastAutomationStatusSnapshot(ws.roomId, {
+          sessionId: null,
+          ownerViewerId: ws.clientId,
+          packageId: packageId ?? null,
+          revision: revision ?? null,
+          status: 'error',
+          message: '执行请求缺少有效的 packageId 或 revision'
+        });
+        return;
+      }
+
+      try {
+        await startAutomationSession(ws.roomId, ws, packageId, revision);
+      } catch (error) {
+        broadcastAutomationStatusSnapshot(ws.roomId, {
+          sessionId: null,
+          ownerViewerId: ws.clientId,
+          packageId,
+          revision,
+          status: 'error',
+          message: error.message || '启动执行失败'
+        });
+      }
+      return;
+    }
+
+    if (message.type === 'automation_stop') {
+      if (ws.clientType !== 'viewer') {
+        safeSend(ws, { type: 'warning', message: 'Only viewer clients can stop automation' });
+        return;
+      }
+
+      const stopped = stopAutomationSession(ws.roomId, '用户停止执行');
+      if (!stopped) {
+        broadcastAutomationStatusSnapshot(ws.roomId, {
+          sessionId: null,
+          ownerViewerId: ws.clientId,
+          packageId: null,
+          revision: null,
+          status: 'stopped',
+          message: '当前没有执行中的会话'
+        });
+      }
       return;
     }
 
@@ -682,6 +1449,12 @@ wss.on('connection', (ws, req) => {
       currentRoom.publisher = null;
       currentRoom.publisherConnectedAt = null;
 
+      if (automationSessions.has(ws.roomId)) {
+        finalizeAutomationSession(ws.roomId, 'error', 'Publisher 已断开', {
+          sendStopCommand: false
+        });
+      }
+
       for (const viewer of currentRoom.viewers.values()) {
         safeSend(viewer, {
           type: 'publisher_left',
@@ -692,6 +1465,13 @@ wss.on('connection', (ws, req) => {
 
     if (ws.clientType === 'viewer') {
       currentRoom.viewers.delete(ws.clientId);
+
+      const session = automationSessions.get(ws.roomId);
+      if (session && session.ownerViewerId === ws.clientId) {
+        finalizeAutomationSession(ws.roomId, 'stopped', '控制端已断开', {
+          sendStopCommand: true
+        });
+      }
 
       if (currentRoom.publisher) {
         safeSend(currentRoom.publisher, {
