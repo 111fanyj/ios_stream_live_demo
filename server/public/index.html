@@ -115,7 +115,7 @@
       }
 
       .viewer-stage {
-        min-height: 56vh;
+        min-height: 86vh;
         padding: 14px;
         display: grid;
         place-items: center;
@@ -127,16 +127,14 @@
       .video-shell {
         position: relative;
         display: inline-grid;
+        width: 100%;
         max-width: 100%;
-        max-height: 68vh;
       }
 
       video {
         grid-area: 1 / 1;
         display: block;
-        max-width: 100%;
-        max-height: 68vh;
-        width: auto;
+        width: 100%;
         height: auto;
         border-radius: 8px;
         background: #101418;
@@ -148,6 +146,93 @@
         pointer-events: none;
         overflow: hidden;
         border-radius: 8px;
+      }
+
+      .crop-box {
+        position: absolute;
+        z-index: 4;
+        left: 35%;
+        top: 35%;
+        width: 30%;
+        height: 18%;
+        min-width: 24px;
+        min-height: 24px;
+        border: 2px solid var(--accent-2);
+        border-radius: 6px;
+        background: rgba(37, 99, 235, 0.12);
+        box-shadow: 0 0 0 9999px rgba(16, 20, 24, 0.16);
+        cursor: move;
+        touch-action: none;
+      }
+
+      .crop-box-label {
+        position: absolute;
+        left: 6px;
+        top: 6px;
+        padding: 3px 6px;
+        border-radius: 6px;
+        background: rgba(23, 32, 42, 0.82);
+        color: white;
+        font-size: 12px;
+        pointer-events: none;
+      }
+
+      .crop-handle {
+        position: absolute;
+        width: 12px;
+        height: 12px;
+        border: 2px solid white;
+        border-radius: 999px;
+        background: var(--accent-2);
+        box-shadow: 0 1px 4px rgba(23, 32, 42, 0.28);
+      }
+
+      .crop-handle[data-handle="nw"] {
+        left: -7px;
+        top: -7px;
+        cursor: nwse-resize;
+      }
+
+      .crop-handle[data-handle="n"] {
+        left: calc(50% - 6px);
+        top: -7px;
+        cursor: ns-resize;
+      }
+
+      .crop-handle[data-handle="ne"] {
+        right: -7px;
+        top: -7px;
+        cursor: nesw-resize;
+      }
+
+      .crop-handle[data-handle="e"] {
+        right: -7px;
+        top: calc(50% - 6px);
+        cursor: ew-resize;
+      }
+
+      .crop-handle[data-handle="se"] {
+        right: -7px;
+        bottom: -7px;
+        cursor: nwse-resize;
+      }
+
+      .crop-handle[data-handle="s"] {
+        left: calc(50% - 6px);
+        bottom: -7px;
+        cursor: ns-resize;
+      }
+
+      .crop-handle[data-handle="sw"] {
+        left: -7px;
+        bottom: -7px;
+        cursor: nesw-resize;
+      }
+
+      .crop-handle[data-handle="w"] {
+        left: -7px;
+        top: calc(50% - 6px);
+        cursor: ew-resize;
       }
 
       .overlay-marker {
@@ -449,6 +534,17 @@
             <div id="videoShell" class="video-shell" hidden>
               <video id="videoView" autoplay playsinline muted></video>
               <div id="overlay" class="overlay"></div>
+              <div id="cropBox" class="crop-box" aria-label="图片模板裁剪区域">
+                <span class="crop-box-label">模板区域</span>
+                <span class="crop-handle" data-handle="nw"></span>
+                <span class="crop-handle" data-handle="n"></span>
+                <span class="crop-handle" data-handle="ne"></span>
+                <span class="crop-handle" data-handle="e"></span>
+                <span class="crop-handle" data-handle="se"></span>
+                <span class="crop-handle" data-handle="s"></span>
+                <span class="crop-handle" data-handle="sw"></span>
+                <span class="crop-handle" data-handle="w"></span>
+              </div>
             </div>
           </div>
         </section>
@@ -650,6 +746,7 @@
       const connectionPanel = document.getElementById('connectionPanel');
       const toggleConnectionButton = document.getElementById('toggleConnectionButton');
       const overlay = document.getElementById('overlay');
+      const cropBox = document.getElementById('cropBox');
       const automationLog = document.getElementById('automationLog');
       const automationState = document.getElementById('automationState');
 
@@ -703,6 +800,7 @@
       let automationLines = [];
       let steps = [];
       let assets = [];
+      let cropDrag = null;
 
       serverUrlInput.value = window.location.origin;
 
@@ -831,6 +929,7 @@
         videoView.srcObject = remoteStream;
         videoShell.hidden = false;
         emptyState.hidden = true;
+        updateCropBoxFromInputs();
         setPublisherState('已连接');
         setRTCText('视频轨道已连接');
         pushLog('收到远端视频轨道', {
@@ -949,6 +1048,84 @@
           return 0;
         }
         return Math.max(0, Math.min(1, number));
+      }
+
+      function formatCropValue(value) {
+        return Number(value.toFixed(3)).toString();
+      }
+
+      function getCropValues() {
+        const width = Math.max(0.02, Math.min(1, Number(cropWInput.value) || 0.2));
+        const height = Math.max(0.02, Math.min(1, Number(cropHInput.value) || 0.2));
+        const x = Math.max(0, Math.min(1 - width, Number(cropXInput.value) || 0));
+        const y = Math.max(0, Math.min(1 - height, Number(cropYInput.value) || 0));
+        return { x, y, width, height };
+      }
+
+      function setCropValues(nextCrop) {
+        const minSize = 0.02;
+        const width = Math.max(minSize, Math.min(1, Number(nextCrop.width) || minSize));
+        const height = Math.max(minSize, Math.min(1, Number(nextCrop.height) || minSize));
+        const x = Math.max(0, Math.min(1 - width, Number(nextCrop.x) || 0));
+        const y = Math.max(0, Math.min(1 - height, Number(nextCrop.y) || 0));
+
+        cropXInput.value = formatCropValue(x);
+        cropYInput.value = formatCropValue(y);
+        cropWInput.value = formatCropValue(width);
+        cropHInput.value = formatCropValue(height);
+        updateCropBoxFromInputs();
+      }
+
+      function updateCropBoxFromInputs() {
+        const crop = getCropValues();
+        cropBox.style.left = `${crop.x * 100}%`;
+        cropBox.style.top = `${crop.y * 100}%`;
+        cropBox.style.width = `${crop.width * 100}%`;
+        cropBox.style.height = `${crop.height * 100}%`;
+      }
+
+      function cropFromPointerDrag(event) {
+        if (!cropDrag) {
+          return null;
+        }
+
+        const dx = (event.clientX - cropDrag.startClientX) / Math.max(1, cropDrag.shellRect.width);
+        const dy = (event.clientY - cropDrag.startClientY) / Math.max(1, cropDrag.shellRect.height);
+        const start = cropDrag.startCrop;
+        const handle = cropDrag.handle;
+        const minSize = 0.02;
+        let x = start.x;
+        let y = start.y;
+        let width = start.width;
+        let height = start.height;
+
+        if (handle === 'move') {
+          x = Math.max(0, Math.min(1 - width, start.x + dx));
+          y = Math.max(0, Math.min(1 - height, start.y + dy));
+          return { x, y, width, height };
+        }
+
+        if (handle.includes('e')) {
+          width = Math.max(minSize, Math.min(1 - start.x, start.width + dx));
+        }
+
+        if (handle.includes('s')) {
+          height = Math.max(minSize, Math.min(1 - start.y, start.height + dy));
+        }
+
+        if (handle.includes('w')) {
+          const right = start.x + start.width;
+          x = Math.max(0, Math.min(right - minSize, start.x + dx));
+          width = right - x;
+        }
+
+        if (handle.includes('n')) {
+          const bottom = start.y + start.height;
+          y = Math.max(0, Math.min(bottom - minSize, start.y + dy));
+          height = bottom - y;
+        }
+
+        return { x, y, width, height };
       }
 
       function makeTarget(refInput, xInput, yInput) {
@@ -1166,10 +1343,7 @@
           return;
         }
 
-        const x = clamp01(cropXInput.value);
-        const y = clamp01(cropYInput.value);
-        const w = Math.max(0.01, Math.min(1 - x, Number(cropWInput.value) || 0.2));
-        const h = Math.max(0.01, Math.min(1 - y, Number(cropHInput.value) || 0.2));
+        const { x, y, width: w, height: h } = getCropValues();
         const sx = Math.round(x * videoView.videoWidth);
         const sy = Math.round(y * videoView.videoHeight);
         const sw = Math.max(1, Math.round(w * videoView.videoWidth));
@@ -1389,6 +1563,42 @@
       toggleConnectionButton.addEventListener('click', () => {
         setConnectionCollapsed(!connectionPanel.hidden);
       });
+      [cropXInput, cropYInput, cropWInput, cropHInput].forEach((input) => {
+        input.addEventListener('input', updateCropBoxFromInputs);
+        input.addEventListener('change', () => {
+          setCropValues(getCropValues());
+        });
+      });
+      cropBox.addEventListener('pointerdown', (event) => {
+        const shellRect = videoShell.getBoundingClientRect();
+        if (shellRect.width <= 0 || shellRect.height <= 0) {
+          return;
+        }
+
+        cropDrag = {
+          handle: event.target.dataset.handle || 'move',
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          startCrop: getCropValues(),
+          shellRect,
+        };
+        cropBox.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      });
+      cropBox.addEventListener('pointermove', (event) => {
+        const nextCrop = cropFromPointerDrag(event);
+        if (!nextCrop) {
+          return;
+        }
+
+        setCropValues(nextCrop);
+      });
+      cropBox.addEventListener('pointerup', () => {
+        cropDrag = null;
+      });
+      cropBox.addEventListener('pointercancel', () => {
+        cropDrag = null;
+      });
       addStepButton.addEventListener('click', addStep);
       captureAssetButton.addEventListener('click', captureAssetFromVideo);
       clearStepsButton.addEventListener('click', () => {
@@ -1429,6 +1639,7 @@
       });
 
       updateStepFields();
+      updateCropBoxFromInputs();
       renderEditor();
     </script>
   </body>

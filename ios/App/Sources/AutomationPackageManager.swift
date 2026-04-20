@@ -2,7 +2,11 @@ import Foundation
 import Observation
 import ZIPFoundation
 
-struct AutomationPackageMetadata: Decodable {
+struct AutomationPackageListResponse: Decodable {
+    let packages: [AutomationPackageMetadata]
+}
+
+struct AutomationPackageMetadata: Decodable, Identifiable {
     struct Revision: Decodable {
         let revision: Int
         let name: String
@@ -18,6 +22,34 @@ struct AutomationPackageMetadata: Decodable {
     let latestRevision: Int
     let activeRevision: Int?
     let revisions: [Revision]
+
+    var id: String {
+        packageId
+    }
+
+    var latestSummary: String {
+        guard latestRevision > 0 else {
+            return "\(packageId) / 暂无 revision"
+        }
+
+        let revision = revisions.first { $0.revision == latestRevision }
+        let stepCount = revision?.stepCount ?? 0
+        let imageCount = revision?.imageCount ?? 0
+        return "\(packageId) r\(latestRevision) / \(stepCount) steps / \(imageCount) images"
+    }
+}
+
+private struct HTTPStatusError: LocalizedError {
+    let statusCode: Int
+    let body: String
+
+    var errorDescription: String? {
+        if body.isEmpty {
+            return "HTTP \(statusCode)"
+        }
+
+        return "HTTP \(statusCode): \(body.prefix(160))"
+    }
 }
 
 @MainActor
@@ -25,10 +57,34 @@ struct AutomationPackageMetadata: Decodable {
 final class AutomationPackageManager {
     private(set) var status: String = "未下载"
     private(set) var activeSummary: String = AutomationPackageManager.loadActiveSummary()
+    private(set) var availablePackages: [AutomationPackageMetadata] = []
     private(set) var isDownloading = false
+    private(set) var isLoadingPackageList = false
 
     func refreshActiveSummary() {
         activeSummary = Self.loadActiveSummary()
+    }
+
+    func getList(serverURL: String) async {
+        guard let listURL = makeAutomationListURL(serverURL: serverURL) else {
+            status = "服务端地址无效"
+            return
+        }
+
+        isLoadingPackageList = true
+        defer { isLoadingPackageList = false }
+
+        do {
+            status = "正在读取可用方案列表..."
+            let data = try await fetchData(from: listURL)
+            let response = try JSONDecoder().decode(AutomationPackageListResponse.self, from: data)
+            availablePackages = response.packages.sorted { first, second in
+                first.packageId.localizedStandardCompare(second.packageId) == .orderedAscending
+            }
+            status = availablePackages.isEmpty ? "服务端暂无方案包" : "已读取 \(availablePackages.count) 个方案包"
+        } catch {
+            status = "读取方案列表失败: \(error.localizedDescription)"
+        }
     }
 
     func downloadLatest(serverURL: String, packageId: String) async {
@@ -87,10 +143,13 @@ final class AutomationPackageManager {
 
     private func fetchData(from url: URL) async throws -> Data {
         let (data, response) = try await URLSession.shared.data(from: url)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode)
-        else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw HTTPStatusError(statusCode: httpResponse.statusCode, body: body)
         }
 
         return data
@@ -165,6 +224,24 @@ final class AutomationPackageManager {
         return components.url
     }
 
+    private func makeAutomationListURL(serverURL: String) -> URL? {
+        guard var components = URLComponents(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+
+        if components.scheme == "ws" {
+            components.scheme = "http"
+        }
+
+        if components.scheme == "wss" {
+            components.scheme = "https"
+        }
+
+        components.queryItems = nil
+        components.path = "/api/automation/packages"
+        return components.url
+    }
+
     private func makeDownloadURL(serverURL: String, downloadPath: String) -> URL? {
         guard let baseURL = URL(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return nil
@@ -178,8 +255,13 @@ final class AutomationPackageManager {
         components.scheme = baseURL.scheme == "wss" ? "https" : (baseURL.scheme == "ws" ? "http" : baseURL.scheme)
         components.host = baseURL.host
         components.port = baseURL.port
-        components.path = downloadPath
-        return components.url
+        components.path = "/"
+
+        guard let originURL = components.url else {
+            return nil
+        }
+
+        return URL(string: downloadPath, relativeTo: originURL)?.absoluteURL
     }
 
     private static func loadActiveSummary() -> String {

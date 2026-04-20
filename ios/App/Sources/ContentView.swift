@@ -145,16 +145,48 @@ struct ContentView: View {
                             .autocorrectionDisabled()
                             .textFieldStyle(.roundedBorder)
 
-                        Button(automationPackageManager.isDownloading ? "正在下载方案..." : "下载并设为 active package") {
-                            Task {
-                                await automationPackageManager.downloadLatest(
-                                    serverURL: configuration.serverURL,
-                                    packageId: automationPackageID
-                                )
+                        HStack {
+                            Button(automationPackageManager.isLoadingPackageList ? "正在获取列表..." : "获取可用方案列表") {
+                                Task {
+                                    await automationPackageManager.getList(serverURL: configuration.serverURL)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(automationPackageManager.isLoadingPackageList)
+
+                            Button(automationPackageManager.isDownloading ? "正在下载方案..." : "下载并设为 active package") {
+                                Task {
+                                    await automationPackageManager.downloadLatest(
+                                        serverURL: configuration.serverURL,
+                                        packageId: automationPackageID
+                                    )
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(automationPackageManager.isDownloading)
+                        }
+
+                        if !automationPackageManager.availablePackages.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("可用方案")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
+
+                                ForEach(automationPackageManager.availablePackages) { package in
+                                    Button {
+                                        automationPackageID = package.packageId
+                                    } label: {
+                                        HStack {
+                                            Text(package.latestSummary)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                            Text("选择")
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
                             }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(automationPackageManager.isDownloading)
 
                         Text("Active package: \(automationPackageManager.activeSummary)")
                             .font(.subheadline)
