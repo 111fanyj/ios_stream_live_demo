@@ -45,6 +45,14 @@
         margin-bottom: 18px;
       }
 
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
       h1,
       h2,
       h3,
@@ -66,9 +74,17 @@
 
       .workspace {
         display: grid;
-        grid-template-columns: 300px minmax(360px, 1fr) 380px;
+        grid-template-columns: 300px minmax(320px, 620px) minmax(380px, 1fr);
         gap: 14px;
         align-items: start;
+      }
+
+      .workspace.connection-collapsed {
+        grid-template-columns: minmax(320px, 620px) minmax(380px, 1fr);
+      }
+
+      .connection-panel[hidden] {
+        display: none;
       }
 
       .panel,
@@ -233,6 +249,11 @@
         cursor: pointer;
       }
 
+      .toolbar-button {
+        width: auto;
+        min-width: 118px;
+      }
+
       button.secondary {
         border: 1px solid var(--line);
         background: #fff;
@@ -306,6 +327,21 @@
         color: var(--muted);
       }
 
+      .paste-target {
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        background: #fbfcfe;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .paste-target:focus {
+        outline: 2px solid rgba(37, 99, 235, 0.28);
+        outline-offset: 2px;
+      }
+
       .asset-thumb {
         display: flex;
         align-items: center;
@@ -341,6 +377,10 @@
         .workspace {
           grid-template-columns: 1fr;
         }
+
+        .workspace.connection-collapsed {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
@@ -351,11 +391,14 @@
           <h1>iOS 自动化直播工作台</h1>
           <p class="subtitle">连接 iOS 屏幕直播，编辑识别和点击流程，发布给 iOS 本地执行。</p>
         </div>
-        <span class="badge"><span id="statusDot" class="dot"></span><span id="statusLabel">等待直播</span></span>
+        <div class="topbar-actions">
+          <span class="badge"><span id="statusDot" class="dot"></span><span id="statusLabel">等待直播</span></span>
+          <button id="toggleConnectionButton" class="secondary toolbar-button" type="button" aria-expanded="true" aria-controls="connectionPanel">收起连接</button>
+        </div>
       </header>
 
-      <section class="workspace">
-        <aside class="panel">
+      <section id="workspace" class="workspace">
+        <aside id="connectionPanel" class="panel connection-panel">
           <h2>连接</h2>
           <label>
             服务端地址
@@ -560,9 +603,10 @@
             </div>
             <button id="captureAssetButton" type="button" class="secondary">从当前画面截取模板</button>
             <label>
-              上传 PNG
-              <input id="assetFileInput" type="file" accept="image/png" />
+              上传图片
+              <input id="assetFileInput" type="file" accept="image/*" />
             </label>
+            <div id="pasteTarget" class="paste-target" tabindex="0">复制图片后按 Cmd+V / Ctrl+V，可直接插入为图片模板。</div>
             <div id="assetList" class="asset-list">暂无图片模板</div>
           </section>
 
@@ -602,6 +646,9 @@
       const statusDot = document.getElementById('statusDot');
       const statusLabel = document.getElementById('statusLabel');
       const debugLog = document.getElementById('debugLog');
+      const workspace = document.getElementById('workspace');
+      const connectionPanel = document.getElementById('connectionPanel');
+      const toggleConnectionButton = document.getElementById('toggleConnectionButton');
       const overlay = document.getElementById('overlay');
       const automationLog = document.getElementById('automationLog');
       const automationState = document.getElementById('automationState');
@@ -637,6 +684,7 @@
       const cropHInput = document.getElementById('cropHInput');
       const captureAssetButton = document.getElementById('captureAssetButton');
       const assetFileInput = document.getElementById('assetFileInput');
+      const pasteTarget = document.getElementById('pasteTarget');
       const assetList = document.getElementById('assetList');
       const assetCount = document.getElementById('assetCount');
       const stepList = document.getElementById('stepList');
@@ -1062,6 +1110,56 @@
         renderEditor();
       }
 
+      function readFileAsDataURL(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error || new Error('图片读取失败'));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      function convertImageDataURLToPNG(dataUrl) {
+        return new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = image.naturalWidth || image.width;
+            canvas.height = image.naturalHeight || image.height;
+            const context = canvas.getContext('2d');
+            context.drawImage(image, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+          };
+          image.onerror = () => reject(new Error('图片解码失败'));
+          image.src = dataUrl;
+        });
+      }
+
+      async function addImageFileAsAsset(file, sourceLabel) {
+        if (!file || !file.type.startsWith('image/')) {
+          publishResult.textContent = '剪贴板或文件中没有图片';
+          return;
+        }
+
+        try {
+          const dataUrl = await readFileAsDataURL(file);
+          const pngDataUrl = dataUrl.startsWith('data:image/png;')
+            ? dataUrl
+            : await convertImageDataURLToPNG(dataUrl);
+          const assetId = nextAssetId();
+          addAsset(assetId, pngDataUrl);
+          publishResult.textContent = `已从${sourceLabel}插入图片模板: ${assetId}`;
+        } catch (error) {
+          publishResult.textContent = `图片插入失败: ${error.message}`;
+        }
+      }
+
+      function findImageFileFromClipboard(event) {
+        const items = Array.from(event.clipboardData?.items || []);
+        const imageItem = items.find((item) => item.kind === 'file' && item.type.startsWith('image/'));
+        return imageItem?.getAsFile() || null;
+      }
+
       function captureAssetFromVideo() {
         if (!videoView.videoWidth || !videoView.videoHeight) {
           publishResult.textContent = '当前没有可截取的视频帧';
@@ -1170,6 +1268,13 @@
         } else if (type === 'error') {
           automationState.textContent = `错误: ${event.message || event.stepId || 'automation'}`;
         }
+      }
+
+      function setConnectionCollapsed(isCollapsed) {
+        connectionPanel.hidden = isCollapsed;
+        workspace.classList.toggle('connection-collapsed', isCollapsed);
+        toggleConnectionButton.textContent = isCollapsed ? '展开连接' : '收起连接';
+        toggleConnectionButton.setAttribute('aria-expanded', String(!isCollapsed));
       }
 
       connectButton.addEventListener('click', () => {
@@ -1281,6 +1386,9 @@
       });
 
       stepTypeInput.addEventListener('change', updateStepFields);
+      toggleConnectionButton.addEventListener('click', () => {
+        setConnectionCollapsed(!connectionPanel.hidden);
+      });
       addStepButton.addEventListener('click', addStep);
       captureAssetButton.addEventListener('click', captureAssetFromVideo);
       clearStepsButton.addEventListener('click', () => {
@@ -1297,14 +1405,27 @@
       packageIdInput.addEventListener('input', renderEditor);
       packageNameInput.addEventListener('input', renderEditor);
 
+      document.addEventListener('paste', (event) => {
+        const file = findImageFileFromClipboard(event);
+        if (!file) {
+          return;
+        }
+
+        event.preventDefault();
+        addImageFileAsAsset(file, '剪贴板');
+      });
+
+      pasteTarget.addEventListener('click', () => {
+        pasteTarget.focus();
+      });
+
       assetFileInput.addEventListener('change', () => {
         const file = assetFileInput.files[0];
         if (!file) {
           return;
         }
-        const reader = new FileReader();
-        reader.onload = () => addAsset(nextAssetId(), reader.result);
-        reader.readAsDataURL(file);
+        addImageFileAsAsset(file, '上传');
+        assetFileInput.value = '';
       });
 
       updateStepFields();
