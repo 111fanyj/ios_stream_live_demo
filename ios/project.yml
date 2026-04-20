@@ -3,6 +3,9 @@ packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
     branch: latest
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: 0.9.19
 schemes:
   IOSStreamViewer:
     build:
@@ -58,6 +61,7 @@ targets:
         TARGETED_DEVICE_FAMILY: 1,2
     dependencies:
       - target: BroadcastUploadExtension
+      - package: ZIPFoundation
   BroadcastUploadExtension:
     type: app-extension
     platform: iOS

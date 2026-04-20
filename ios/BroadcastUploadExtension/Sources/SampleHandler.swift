@@ -65,6 +65,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private lazy var screenVideoCapturer = RTCVideoCapturer(delegate: screenVideoSource)
     private var viewerPeers: [String: ViewerPeerState] = [:]
     private var peerConnectionToViewerID: [ObjectIdentifier: String] = [:]
+    private var automationRunner: AutomationRunner?
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         resetDiagnosticsSession()
@@ -82,6 +83,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         }
 
         logEvent("读取配置 server=\(configuration.serverURL) room=\(configuration.roomID) token=\(configuration.token.isEmpty ? "<empty>" : "<set>")")
+        loadAutomationRunner()
 
         guard let url = buildPublisherURL(configuration: configuration) else {
             let error = NSError(domain: "IOSStreamViewer", code: -2, userInfo: [NSLocalizedDescriptionKey: "服务端地址无效"])
@@ -121,6 +123,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         stopDiagnosticsHeartbeatLoop()
         flushSampleDiagnostics(force: true)
         flushSubmittedFrameDiagnostics(force: true)
+        automationRunner = nil
         resetPeerConnections()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
@@ -136,6 +139,13 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            logFrameProcessingFailureIfNeeded(message: "视频 sampleBuffer 中没有可用的 image buffer", at: now)
+            return
+        }
+
+        automationRunner?.process(pixelBuffer: pixelBuffer, at: now)
+
         guard !viewerPeers.isEmpty else {
             if now.timeIntervalSince(lastNoViewerLogAt) >= 5 {
                 lastNoViewerLogAt = now
@@ -145,11 +155,6 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         }
 
         guard now.timeIntervalSince(lastSubmittedAt) >= minimumSendInterval else {
-            return
-        }
-
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            logFrameProcessingFailureIfNeeded(message: "视频 sampleBuffer 中没有可用的 image buffer", at: now)
             return
         }
 
@@ -213,6 +218,22 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         viewerPeers.removeAll()
         peerConnectionToViewerID.removeAll()
+    }
+
+    private func loadAutomationRunner() {
+        do {
+            automationRunner = try AutomationRunner.loadActive { [weak self] event in
+                self?.sendAutomationEvent(event)
+            }
+
+            let summary = automationRunner?.summary ?? "unknown"
+            logEvent("已加载自动化方案: \(summary)")
+            updateAutomationStatus("已加载 \(summary)")
+        } catch {
+            automationRunner = nil
+            logEvent("未加载自动化方案: \(error.localizedDescription)")
+            updateAutomationStatus("未加载自动化方案: \(error.localizedDescription)")
+        }
     }
 
     private func startPeerConnection(for viewerID: String) {
@@ -523,6 +544,25 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 self?.logger.error("Failed to send signal to \(targetID, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 self?.updateDiagnostics(status: "信令发送失败", error: error.localizedDescription)
                 self?.logEvent("发送 signal 失败 -> \(targetID): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func sendAutomationEvent(_ event: [String: Any]) {
+        guard let task = webSocketTask,
+              let payload = makeJSONString(from: [
+                  "type": "automation_event",
+                  "event": event
+              ])
+        else {
+            logEvent("自动化事件发送前置条件不满足")
+            return
+        }
+
+        task.send(.string(payload)) { [weak self] error in
+            if let error {
+                self?.logger.error("Failed to send automation event: \(error.localizedDescription, privacy: .public)")
+                self?.logEvent("自动化事件发送失败: \(error.localizedDescription)")
             }
         }
     }
@@ -847,6 +887,14 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         if let lastFrameAt {
             defaults.set(lastFrameAt, forKey: StreamDefaults.diagnosticsLastFrameAtKey)
         }
+    }
+
+    private func updateAutomationStatus(_ status: String) {
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return
+        }
+
+        defaults.set(status, forKey: StreamDefaults.automationLastStatusKey)
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {

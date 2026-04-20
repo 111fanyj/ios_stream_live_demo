@@ -73,7 +73,20 @@ open IOSStreamViewer.xcodeproj
 6. 服务端负责转发 offer、answer、ICE candidate 等信令。
 7. 浏览器收到 DataChannel 帧后即可看到实时画面。
 
-## 5. 当前实现说明
+## 5. 自动化方案流程
+
+浏览器首页现在也是自动化方案编辑器：
+
+1. 连接同一个房间并看到 iOS 画面。
+2. 在“方案编辑”里添加 `waitForText`、`waitForImage`、`tap`、`drag` 动作。
+3. 图片识别可以上传 PNG，也可以从当前视频帧按归一化区域截取模板。
+4. 点击“保存并发布 ZIP”，服务端会保存 `automation.json` 和 `images/`，并生成可下载 ZIP。
+5. iOS 主 App 的“自动化方案”区域填写 Package ID，点击下载并设为 active package。
+6. 下一次启动 Broadcast Extension 时，会从 App Group 读取本地 active package，用 ReplayKit 帧做本地识别，并把 tap/drag 命令先发送回网页显示。
+
+第一版不会注入真实系统触摸，也不会直接控制硬件；网页上显示的点击点和拖拽轨迹就是后续硬件控制层要消费的归一化坐标。
+
+## 6. 当前实现说明
 
 这是一个为了尽快跑通 WebRTC 链路的版本：
 

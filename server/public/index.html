@@ -3,20 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>iOS Screen Viewer</title>
+    <title>iOS 自动化直播工作台</title>
     <style>
       :root {
         color-scheme: light;
-        --bg: #f5efe4;
-        --surface: rgba(255, 252, 246, 0.92);
-        --surface-strong: rgba(255, 255, 255, 0.98);
-        --ink: #16233a;
-        --muted: #5b6778;
-        --accent: #ef6c3d;
-        --accent-soft: #ffd8c9;
-        --line: rgba(22, 35, 58, 0.12);
-        --ok: #1d8a5f;
-        --warn: #b26d00;
+        --bg: #f7f8fb;
+        --surface: #ffffff;
+        --ink: #17202a;
+        --muted: #5d6b7a;
+        --line: #d9e1ea;
+        --accent: #0f9f6e;
+        --accent-2: #2563eb;
+        --warn: #b7791f;
+        --danger: #c2414b;
+        --shadow: 0 16px 40px rgba(23, 32, 42, 0.08);
       }
 
       * {
@@ -26,102 +26,161 @@
       body {
         margin: 0;
         min-height: 100vh;
-        font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+        font-family: "Avenir Next", "Helvetica Neue", Arial, sans-serif;
         color: var(--ink);
-        background:
-          radial-gradient(circle at top left, rgba(239, 108, 61, 0.16), transparent 28%),
-          radial-gradient(circle at 85% 15%, rgba(29, 138, 95, 0.12), transparent 22%),
-          linear-gradient(180deg, #fbf6ec 0%, var(--bg) 100%);
+        background: var(--bg);
       }
 
       main {
-        width: min(1180px, calc(100% - 32px));
+        width: min(1440px, calc(100% - 28px));
         margin: 0 auto;
-        padding: 32px 0 48px;
+        padding: 22px 0 34px;
       }
 
-      .hero {
-        display: grid;
-        gap: 20px;
-        margin-bottom: 24px;
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 16px;
+        margin-bottom: 18px;
       }
 
-      .hero h1 {
+      h1,
+      h2,
+      h3,
+      p {
         margin: 0;
-        font-size: clamp(30px, 6vw, 58px);
-        line-height: 0.95;
-        letter-spacing: -0.04em;
-        max-width: 10ch;
       }
 
-      .hero p {
-        margin: 0;
-        max-width: 58ch;
+      h1 {
+        font-size: 32px;
+        line-height: 1.15;
+      }
+
+      .subtitle {
+        margin-top: 6px;
+        max-width: 72ch;
         color: var(--muted);
-        font-size: 16px;
-        line-height: 1.6;
+        line-height: 1.55;
       }
 
-      .panel-grid {
+      .workspace {
         display: grid;
-        grid-template-columns: 320px minmax(0, 1fr);
-        gap: 20px;
+        grid-template-columns: 300px minmax(360px, 1fr) 380px;
+        gap: 14px;
+        align-items: start;
       }
 
       .panel,
       .viewer {
         border: 1px solid var(--line);
-        border-radius: 28px;
+        border-radius: 8px;
         background: var(--surface);
-        backdrop-filter: blur(18px);
-        box-shadow: 0 18px 45px rgba(22, 35, 58, 0.08);
+        box-shadow: var(--shadow);
       }
 
       .panel {
-        padding: 22px;
+        padding: 16px;
+        display: grid;
+        gap: 14px;
       }
 
       .viewer {
         overflow: hidden;
-        display: grid;
-        grid-template-rows: auto 1fr;
-        min-height: 70vh;
       }
 
       .viewer-head {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 18px 22px;
+        gap: 12px;
+        padding: 14px 16px;
         border-bottom: 1px solid var(--line);
-        background: var(--surface-strong);
       }
 
       .viewer-stage {
-        padding: 18px;
+        min-height: 56vh;
+        padding: 14px;
         display: grid;
         place-items: center;
         background:
-          linear-gradient(135deg, rgba(22, 35, 58, 0.02), rgba(22, 35, 58, 0.08)),
-          repeating-linear-gradient(
-            135deg,
-            rgba(255, 255, 255, 0.3),
-            rgba(255, 255, 255, 0.3) 14px,
-            rgba(255, 255, 255, 0.18) 14px,
-            rgba(255, 255, 255, 0.18) 28px
-          );
+          linear-gradient(90deg, rgba(15, 159, 110, 0.06), rgba(37, 99, 235, 0.05)),
+          #eef2f6;
+      }
+
+      .video-shell {
+        position: relative;
+        display: inline-grid;
+        max-width: 100%;
+        max-height: 68vh;
+      }
+
+      video {
+        grid-area: 1 / 1;
+        display: block;
+        max-width: 100%;
+        max-height: 68vh;
+        width: auto;
+        height: auto;
+        border-radius: 8px;
+        background: #101418;
+      }
+
+      .overlay {
+        grid-area: 1 / 1;
+        position: relative;
+        pointer-events: none;
+        overflow: hidden;
+        border-radius: 8px;
+      }
+
+      .overlay-marker {
+        position: absolute;
+        width: 22px;
+        height: 22px;
+        margin: -11px 0 0 -11px;
+        border: 3px solid var(--danger);
+        border-radius: 999px;
+        background: rgba(194, 65, 75, 0.22);
+        box-shadow: 0 0 0 8px rgba(194, 65, 75, 0.12);
+      }
+
+      .overlay-line {
+        position: absolute;
+        height: 3px;
+        transform-origin: left center;
+        background: var(--accent-2);
+        box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.12);
+      }
+
+      .overlay-label {
+        position: absolute;
+        transform: translate(10px, -26px);
+        padding: 4px 7px;
+        border-radius: 6px;
+        background: rgba(23, 32, 42, 0.86);
+        color: white;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .empty {
+        display: grid;
+        gap: 10px;
+        text-align: center;
+        color: var(--muted);
       }
 
       .badge {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        padding: 8px 12px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.85);
+        padding: 7px 10px;
         border: 1px solid var(--line);
-        font-size: 13px;
+        border-radius: 8px;
         color: var(--muted);
+        background: #fff;
+        font-size: 13px;
       }
 
       .dot {
@@ -129,41 +188,59 @@
         height: 9px;
         border-radius: 999px;
         background: var(--warn);
-        box-shadow: 0 0 0 5px rgba(178, 109, 0, 0.12);
       }
 
       .dot.live {
-        background: var(--ok);
-        box-shadow: 0 0 0 5px rgba(29, 138, 95, 0.12);
+        background: var(--accent);
       }
 
       label {
         display: grid;
-        gap: 8px;
-        margin-bottom: 16px;
-        font-size: 14px;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--muted);
       }
 
-      input {
+      input,
+      select,
+      textarea {
         width: 100%;
         border: 1px solid var(--line);
-        border-radius: 16px;
-        padding: 12px 14px;
+        border-radius: 8px;
+        padding: 10px 11px;
         font: inherit;
         color: var(--ink);
-        background: rgba(255, 255, 255, 0.82);
+        background: #fff;
+      }
+
+      textarea {
+        min-height: 150px;
+        resize: vertical;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
       }
 
       button {
         width: 100%;
-        padding: 14px 18px;
+        min-height: 40px;
+        padding: 10px 12px;
         border: 0;
-        border-radius: 18px;
+        border-radius: 8px;
         font: inherit;
         font-weight: 700;
-        background: linear-gradient(135deg, var(--accent), #ff965a);
+        background: var(--accent);
         color: white;
         cursor: pointer;
+      }
+
+      button.secondary {
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink);
+      }
+
+      button.danger {
+        background: var(--danger);
       }
 
       button:disabled {
@@ -171,88 +248,115 @@
         cursor: default;
       }
 
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
       .meta {
-        margin-top: 18px;
-        padding-top: 18px;
+        padding-top: 12px;
         border-top: 1px solid var(--line);
         display: grid;
-        gap: 10px;
+        gap: 8px;
         color: var(--muted);
-        font-size: 14px;
-      }
-
-      .debug-log {
-        margin-top: 18px;
-        padding: 14px;
-        border-radius: 18px;
-        border: 1px solid var(--line);
-        background: rgba(22, 35, 58, 0.04);
-      }
-
-      .debug-log h2 {
-        margin: 0 0 10px;
-        font-size: 14px;
-        color: var(--ink);
-      }
-
-      .debug-log pre {
-        margin: 0;
-        max-height: 220px;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-        color: var(--ink);
+        font-size: 13px;
       }
 
       .meta strong {
         color: var(--ink);
       }
 
-      video {
-        width: 100%;
-        max-height: calc(70vh - 90px);
-        object-fit: contain;
-        border-radius: 22px;
-        background: rgba(255, 255, 255, 0.7);
-        border: 1px solid rgba(255, 255, 255, 0.8);
+      .section-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
       }
 
-      .empty {
+      .step-list {
         display: grid;
-        gap: 12px;
-        text-align: center;
-        padding: 32px;
+        gap: 8px;
+        max-height: 220px;
+        overflow: auto;
+      }
+
+      .step-item {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        display: grid;
+        gap: 7px;
+        background: #fbfcfe;
+      }
+
+      .step-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 6px;
+      }
+
+      .asset-list,
+      .event-log {
+        display: grid;
+        gap: 7px;
+        max-height: 160px;
+        overflow: auto;
+        font-size: 12px;
         color: var(--muted);
       }
 
-      .empty strong {
-        font-size: 20px;
-        color: var(--ink);
+      .asset-thumb {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfe;
       }
 
-      @media (max-width: 920px) {
-        .panel-grid {
-          grid-template-columns: 1fr;
-        }
+      .asset-thumb img {
+        width: 42px;
+        height: 42px;
+        object-fit: contain;
+        border-radius: 6px;
+        background: #eef2f6;
+      }
 
-        .viewer {
-          min-height: 58vh;
+      pre {
+        margin: 0;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfe;
+        max-height: 220px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      @media (max-width: 1180px) {
+        .workspace {
+          grid-template-columns: 1fr;
         }
       }
     </style>
   </head>
   <body>
     <main>
-      <section class="hero">
-        <h1>iPhone 当前屏幕实时查看</h1>
-        <p>
-          这个页面作为查看端。iOS App 启动屏幕广播后，Broadcast Extension 会通过 WebRTC 视频轨道把实时画面直接发送到浏览器，这里直接播放远端视频流。
-        </p>
-      </section>
+      <header class="topbar">
+        <div>
+          <h1>iOS 自动化直播工作台</h1>
+          <p class="subtitle">连接 iOS 屏幕直播，编辑识别和点击流程，发布给 iOS 本地执行。</p>
+        </div>
+        <span class="badge"><span id="statusDot" class="dot"></span><span id="statusLabel">等待直播</span></span>
+      </header>
 
-      <section class="panel-grid">
+      <section class="workspace">
         <aside class="panel">
+          <h2>连接</h2>
           <label>
             服务端地址
             <input id="serverUrl" />
@@ -275,8 +379,16 @@
             <div>视频信息: <strong id="lastFrameMeta">暂无</strong></div>
           </div>
 
-          <section class="debug-log">
-            <h2>调试日志</h2>
+          <section>
+            <div class="section-title">
+              <h3>自动化事件</h3>
+              <button id="clearOverlayButton" class="secondary" type="button">清空</button>
+            </div>
+            <div id="automationLog" class="event-log">等待自动化事件...</div>
+          </section>
+
+          <section>
+            <h3>调试日志</h3>
             <pre id="debugLog">等待连接...</pre>
           </section>
         </aside>
@@ -284,16 +396,192 @@
         <section class="viewer">
           <div class="viewer-head">
             <strong id="viewerTitle">房间 demo-room</strong>
-            <span class="badge"><span id="statusDot" class="dot"></span><span id="statusLabel">等待直播</span></span>
+            <span id="automationState" class="badge">自动化未运行</span>
           </div>
           <div class="viewer-stage">
             <div id="emptyState" class="empty">
               <strong>还没有收到画面</strong>
               <span>先在 iOS 端保存服务端地址，再从控制中心启动屏幕广播。</span>
             </div>
-            <video id="videoView" hidden autoplay playsinline muted></video>
+            <div id="videoShell" class="video-shell" hidden>
+              <video id="videoView" autoplay playsinline muted></video>
+              <div id="overlay" class="overlay"></div>
+            </div>
           </div>
         </section>
+
+        <aside class="panel">
+          <h2>方案编辑</h2>
+          <div class="row">
+            <label>
+              Package ID
+              <input id="packageIdInput" value="demo" />
+            </label>
+            <label>
+              名称
+              <input id="packageNameInput" value="Demo Flow" />
+            </label>
+          </div>
+
+          <section>
+            <h3>添加动作</h3>
+            <label>
+              类型
+              <select id="stepTypeInput">
+                <option value="waitForText">按文字识别</option>
+                <option value="waitForImage">按图片识别</option>
+                <option value="tap">点击</option>
+                <option value="drag">按下移动抬起</option>
+              </select>
+            </label>
+            <label>
+              步骤 ID
+              <input id="stepIdInput" placeholder="例如 wait-login" />
+            </label>
+
+            <div id="waitFields">
+              <label>
+                文字
+                <input id="queryInput" placeholder="例如 登录" />
+              </label>
+              <label>
+                图片 Asset ID
+                <input id="assetIdInput" placeholder="例如 login-icon" />
+              </label>
+              <div class="row">
+                <label>
+                  保存为
+                  <input id="saveAsInput" placeholder="例如 loginButton" />
+                </label>
+                <label>
+                  阈值
+                  <input id="thresholdInput" type="number" min="0" max="1" step="0.01" value="0.84" />
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  超时 ms
+                  <input id="timeoutInput" type="number" value="10000" />
+                </label>
+                <label>
+                  轮询 ms
+                  <input id="pollInput" type="number" value="500" />
+                </label>
+              </div>
+            </div>
+
+            <div id="tapFields" hidden>
+              <label>
+                目标引用
+                <input id="targetRefInput" placeholder="例如 loginButton" />
+              </label>
+              <div class="row">
+                <label>
+                  x
+                  <input id="targetXInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                </label>
+                <label>
+                  y
+                  <input id="targetYInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                </label>
+              </div>
+            </div>
+
+            <div id="dragFields" hidden>
+              <div class="row">
+                <label>
+                  起点引用
+                  <input id="fromRefInput" placeholder="可选" />
+                </label>
+                <label>
+                  终点引用
+                  <input id="toRefInput" placeholder="可选" />
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  起点 x
+                  <input id="fromXInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                </label>
+                <label>
+                  起点 y
+                  <input id="fromYInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  终点 x
+                  <input id="toXInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                </label>
+                <label>
+                  终点 y
+                  <input id="toYInput" type="number" min="0" max="1" step="0.01" value="0.75" />
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  按住 ms
+                  <input id="holdInput" type="number" value="120" />
+                </label>
+                <label>
+                  移动 ms
+                  <input id="durationInput" type="number" value="450" />
+                </label>
+              </div>
+            </div>
+
+            <button id="addStepButton" type="button">加入动作</button>
+          </section>
+
+          <section>
+            <div class="section-title">
+              <h3>图片模板</h3>
+              <span class="badge" id="assetCount">0 张</span>
+            </div>
+            <div class="row">
+              <label>
+                截图 x
+                <input id="cropXInput" type="number" min="0" max="1" step="0.01" value="0.35" />
+              </label>
+              <label>
+                截图 y
+                <input id="cropYInput" type="number" min="0" max="1" step="0.01" value="0.35" />
+              </label>
+            </div>
+            <div class="row">
+              <label>
+                宽
+                <input id="cropWInput" type="number" min="0.01" max="1" step="0.01" value="0.3" />
+              </label>
+              <label>
+                高
+                <input id="cropHInput" type="number" min="0.01" max="1" step="0.01" value="0.18" />
+              </label>
+            </div>
+            <button id="captureAssetButton" type="button" class="secondary">从当前画面截取模板</button>
+            <label>
+              上传 PNG
+              <input id="assetFileInput" type="file" accept="image/png" />
+            </label>
+            <div id="assetList" class="asset-list">暂无图片模板</div>
+          </section>
+
+          <section>
+            <div class="section-title">
+              <h3>动作列表</h3>
+              <button id="clearStepsButton" class="danger" type="button">清空</button>
+            </div>
+            <div id="stepList" class="step-list">暂无动作</div>
+          </section>
+
+          <section>
+            <h3>JSON</h3>
+            <textarea id="jsonPreview" spellcheck="false"></textarea>
+          </section>
+
+          <button id="publishButton" type="button">保存并发布 ZIP</button>
+          <div id="publishResult" class="meta">尚未发布</div>
+        </aside>
       </section>
     </main>
 
@@ -308,11 +596,55 @@
       const viewerCount = document.getElementById('viewerCount');
       const lastFrameMeta = document.getElementById('lastFrameMeta');
       const videoView = document.getElementById('videoView');
+      const videoShell = document.getElementById('videoShell');
       const emptyState = document.getElementById('emptyState');
       const viewerTitle = document.getElementById('viewerTitle');
       const statusDot = document.getElementById('statusDot');
       const statusLabel = document.getElementById('statusLabel');
       const debugLog = document.getElementById('debugLog');
+      const overlay = document.getElementById('overlay');
+      const automationLog = document.getElementById('automationLog');
+      const automationState = document.getElementById('automationState');
+
+      const packageIdInput = document.getElementById('packageIdInput');
+      const packageNameInput = document.getElementById('packageNameInput');
+      const stepTypeInput = document.getElementById('stepTypeInput');
+      const stepIdInput = document.getElementById('stepIdInput');
+      const waitFields = document.getElementById('waitFields');
+      const tapFields = document.getElementById('tapFields');
+      const dragFields = document.getElementById('dragFields');
+      const queryInput = document.getElementById('queryInput');
+      const assetIdInput = document.getElementById('assetIdInput');
+      const saveAsInput = document.getElementById('saveAsInput');
+      const thresholdInput = document.getElementById('thresholdInput');
+      const timeoutInput = document.getElementById('timeoutInput');
+      const pollInput = document.getElementById('pollInput');
+      const targetRefInput = document.getElementById('targetRefInput');
+      const targetXInput = document.getElementById('targetXInput');
+      const targetYInput = document.getElementById('targetYInput');
+      const fromRefInput = document.getElementById('fromRefInput');
+      const toRefInput = document.getElementById('toRefInput');
+      const fromXInput = document.getElementById('fromXInput');
+      const fromYInput = document.getElementById('fromYInput');
+      const toXInput = document.getElementById('toXInput');
+      const toYInput = document.getElementById('toYInput');
+      const holdInput = document.getElementById('holdInput');
+      const durationInput = document.getElementById('durationInput');
+      const addStepButton = document.getElementById('addStepButton');
+      const cropXInput = document.getElementById('cropXInput');
+      const cropYInput = document.getElementById('cropYInput');
+      const cropWInput = document.getElementById('cropWInput');
+      const cropHInput = document.getElementById('cropHInput');
+      const captureAssetButton = document.getElementById('captureAssetButton');
+      const assetFileInput = document.getElementById('assetFileInput');
+      const assetList = document.getElementById('assetList');
+      const assetCount = document.getElementById('assetCount');
+      const stepList = document.getElementById('stepList');
+      const clearStepsButton = document.getElementById('clearStepsButton');
+      const clearOverlayButton = document.getElementById('clearOverlayButton');
+      const jsonPreview = document.getElementById('jsonPreview');
+      const publishButton = document.getElementById('publishButton');
+      const publishResult = document.getElementById('publishResult');
 
       let signalingSocket;
       let peerConnection;
@@ -320,12 +652,58 @@
       let hasRemoteDescription = false;
       let pendingCandidates = [];
       let debugLines = [];
+      let automationLines = [];
+      let steps = [];
+      let assets = [];
 
-      function defaultServerUrl() {
-        return window.location.origin;
+      serverUrlInput.value = window.location.origin;
+
+      function pushLog(message, payload) {
+        const timestamp = new Date().toLocaleTimeString();
+        let line = `[${timestamp}] ${message}`;
+        if (payload !== undefined) {
+          try {
+            line += ` ${JSON.stringify(payload)}`;
+          } catch {
+            line += ` ${String(payload)}`;
+          }
+        }
+
+        debugLines.push(line);
+        if (debugLines.length > 60) {
+          debugLines = debugLines.slice(-60);
+        }
+
+        debugLog.textContent = debugLines.join('\n');
+        debugLog.scrollTop = debugLog.scrollHeight;
+        console.log('[viewer]', message, payload ?? '');
       }
 
-      serverUrlInput.value = defaultServerUrl();
+      function pushAutomationLine(message) {
+        const line = `[${new Date().toLocaleTimeString()}] ${message}`;
+        automationLines.push(line);
+        if (automationLines.length > 50) {
+          automationLines = automationLines.slice(-50);
+        }
+        automationLog.textContent = automationLines.join('\n');
+      }
+
+      function setLiveState(isLive) {
+        statusDot.classList.toggle('live', isLive);
+        statusLabel.textContent = isLive ? '直播中' : '等待直播';
+      }
+
+      function setPublisherState(text) {
+        publisherState.textContent = text;
+      }
+
+      function setConnectionText(text) {
+        connectionState.textContent = text;
+      }
+
+      function setRTCText(text) {
+        rtcState.textContent = text;
+      }
 
       async function attemptVideoPlayback(reason) {
         try {
@@ -358,52 +736,14 @@
         pushLog('远端视频开始播放');
       });
 
-      function pushLog(message, payload) {
-        const timestamp = new Date().toLocaleTimeString();
-        let line = `[${timestamp}] ${message}`;
-
-        if (payload !== undefined) {
-          try {
-            line += ` ${JSON.stringify(payload)}`;
-          } catch {
-            line += ` ${String(payload)}`;
-          }
-        }
-
-        debugLines.push(line);
-        if (debugLines.length > 40) {
-          debugLines = debugLines.slice(-40);
-        }
-
-        debugLog.textContent = debugLines.join('\n');
-        debugLog.scrollTop = debugLog.scrollHeight;
-        console.log('[viewer]', message, payload ?? '');
-      }
-
-      function setLiveState(isLive) {
-        statusDot.classList.toggle('live', isLive);
-        statusLabel.textContent = isLive ? '直播中' : '等待直播';
-      }
-
-      function setPublisherState(text) {
-        publisherState.textContent = text;
-      }
-
-      function setConnectionText(text) {
-        connectionState.textContent = text;
-      }
-
-      function setRTCText(text) {
-        rtcState.textContent = text;
-      }
-
       function resetFrameView() {
         videoView.pause();
         videoView.removeAttribute('src');
         videoView.srcObject = null;
-        videoView.hidden = true;
+        videoShell.hidden = true;
         emptyState.hidden = false;
         lastFrameMeta.textContent = '暂无';
+        clearOverlay();
         pushLog('已重置画面显示');
       }
 
@@ -441,7 +781,7 @@
       function attachRemoteTrack(track, streams) {
         const remoteStream = streams[0] || new MediaStream([track]);
         videoView.srcObject = remoteStream;
-        videoView.hidden = false;
+        videoShell.hidden = false;
         emptyState.hidden = true;
         setPublisherState('已连接');
         setRTCText('视频轨道已连接');
@@ -476,46 +816,32 @@
           return;
         }
 
+        signalingSocket.send(JSON.stringify({ type: 'signal', targetId, signal }));
         pushLog('发送 signal', { targetId, signalType: signal.type });
-
-        signalingSocket.send(
-          JSON.stringify({
-            type: 'signal',
-            targetId,
-            signal,
-          })
-        );
       }
 
       function buildSignalUrl(baseUrl, roomId, token) {
         const url = new URL(baseUrl);
-
         if (url.protocol === 'http:') {
           url.protocol = 'ws:';
         }
-
         if (url.protocol === 'https:') {
           url.protocol = 'wss:';
         }
-
         url.searchParams.set('type', 'viewer');
         url.searchParams.set('roomId', roomId);
         if (token) {
           url.searchParams.set('token', token);
         }
-
         return url;
       }
 
       function ensurePeerConnection(publisherId) {
         if (peerConnection && currentPublisherId === publisherId) {
-          pushLog('复用已有 PeerConnection', { publisherId });
           return peerConnection;
         }
 
-        const preservedCandidates = !peerConnection && currentPublisherId === publisherId ? pendingCandidates : [];
         closePeerConnection();
-        pendingCandidates = preservedCandidates;
         currentPublisherId = publisherId;
         pushLog('创建新的 PeerConnection', { publisherId });
 
@@ -527,9 +853,6 @@
           if (!event.candidate || !currentPublisherId) {
             return;
           }
-
-          pushLog('生成本地 ICE candidate', { publisherId: currentPublisherId });
-
           sendSignal(currentPublisherId, {
             type: 'candidate',
             candidate: event.candidate.toJSON(),
@@ -553,7 +876,6 @@
 
           setRTCText(labelMap[state] || state);
           pushLog('PeerConnection 状态变化', { state });
-
           if (state === 'failed' || state === 'disconnected' || state === 'closed') {
             setLiveState(false);
           }
@@ -567,13 +889,286 @@
           return;
         }
 
-        if (pendingCandidates.length > 0) {
-          pushLog('开始补发缓存 ICE candidate', { count: pendingCandidates.length });
-        }
-
         while (pendingCandidates.length > 0) {
           const candidate = pendingCandidates.shift();
           await peerConnection.addIceCandidate(candidate);
+        }
+      }
+
+      function clamp01(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) {
+          return 0;
+        }
+        return Math.max(0, Math.min(1, number));
+      }
+
+      function makeTarget(refInput, xInput, yInput) {
+        const ref = refInput.value.trim();
+        if (ref) {
+          return { ref };
+        }
+        return { x: clamp01(xInput.value), y: clamp01(yInput.value) };
+      }
+
+      function makeAutomationJSON() {
+        return {
+          schemaVersion: 1,
+          packageId: packageIdInput.value.trim() || 'demo',
+          revision: 0,
+          name: packageNameInput.value.trim() || 'Demo Flow',
+          steps,
+        };
+      }
+
+      function renderEditor() {
+        stepList.innerHTML = '';
+        if (steps.length === 0) {
+          stepList.textContent = '暂无动作';
+        } else {
+          for (const [index, step] of steps.entries()) {
+            const item = document.createElement('div');
+            item.className = 'step-item';
+            item.innerHTML = `
+              <strong>${index + 1}. ${step.id}</strong>
+              <span>${step.type}</span>
+              <code>${JSON.stringify(step)}</code>
+            `;
+
+            const actions = document.createElement('div');
+            actions.className = 'step-actions';
+            const up = document.createElement('button');
+            up.type = 'button';
+            up.className = 'secondary';
+            up.textContent = '上移';
+            up.disabled = index === 0;
+            up.onclick = () => {
+              [steps[index - 1], steps[index]] = [steps[index], steps[index - 1]];
+              renderEditor();
+            };
+            const down = document.createElement('button');
+            down.type = 'button';
+            down.className = 'secondary';
+            down.textContent = '下移';
+            down.disabled = index === steps.length - 1;
+            down.onclick = () => {
+              [steps[index + 1], steps[index]] = [steps[index], steps[index + 1]];
+              renderEditor();
+            };
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'danger';
+            remove.textContent = '删除';
+            remove.onclick = () => {
+              steps.splice(index, 1);
+              renderEditor();
+            };
+            actions.append(up, down, remove);
+            item.append(actions);
+            stepList.append(item);
+          }
+        }
+
+        assetList.innerHTML = '';
+        assetCount.textContent = `${assets.length} 张`;
+        if (assets.length === 0) {
+          assetList.textContent = '暂无图片模板';
+        } else {
+          for (const asset of assets) {
+            const row = document.createElement('div');
+            row.className = 'asset-thumb';
+            row.innerHTML = `<img alt="${asset.assetId}" src="${asset.dataUrl}" /><span>${asset.assetId}</span>`;
+            assetList.append(row);
+          }
+        }
+
+        jsonPreview.value = JSON.stringify(makeAutomationJSON(), null, 2);
+      }
+
+      function updateStepFields() {
+        const type = stepTypeInput.value;
+        waitFields.hidden = !(type === 'waitForText' || type === 'waitForImage');
+        tapFields.hidden = type !== 'tap';
+        dragFields.hidden = type !== 'drag';
+        queryInput.parentElement.hidden = type !== 'waitForText';
+        assetIdInput.parentElement.hidden = type !== 'waitForImage';
+        thresholdInput.parentElement.hidden = type !== 'waitForImage';
+      }
+
+      function addStep() {
+        const type = stepTypeInput.value;
+        const id = stepIdInput.value.trim() || `${type}-${steps.length + 1}`;
+        let step;
+
+        if (type === 'waitForText') {
+          step = {
+            id,
+            type,
+            query: queryInput.value.trim(),
+            match: 'contains',
+            timeoutMs: Number(timeoutInput.value) || 10000,
+            pollIntervalMs: Number(pollInput.value) || 500,
+            region: null,
+            saveAs: saveAsInput.value.trim() || `${id}-target`,
+          };
+        } else if (type === 'waitForImage') {
+          step = {
+            id,
+            type,
+            assetId: assetIdInput.value.trim(),
+            threshold: Number(thresholdInput.value) || 0.84,
+            timeoutMs: Number(timeoutInput.value) || 10000,
+            pollIntervalMs: Number(pollInput.value) || 500,
+            region: null,
+            saveAs: saveAsInput.value.trim() || `${id}-target`,
+          };
+        } else if (type === 'tap') {
+          step = {
+            id,
+            type,
+            target: makeTarget(targetRefInput, targetXInput, targetYInput),
+          };
+        } else {
+          step = {
+            id,
+            type,
+            from: makeTarget(fromRefInput, fromXInput, fromYInput),
+            to: makeTarget(toRefInput, toXInput, toYInput),
+            holdMs: Number(holdInput.value) || 120,
+            durationMs: Number(durationInput.value) || 450,
+          };
+        }
+
+        steps.push(step);
+        stepIdInput.value = '';
+        renderEditor();
+      }
+
+      function nextAssetId() {
+        const base = assetIdInput.value.trim() || `asset-${assets.length + 1}`;
+        let candidate = base;
+        let suffix = 2;
+        while (assets.some((asset) => asset.assetId === candidate)) {
+          candidate = `${base}-${suffix}`;
+          suffix += 1;
+        }
+        return candidate;
+      }
+
+      function addAsset(assetId, dataUrl) {
+        assets = assets.filter((asset) => asset.assetId !== assetId);
+        assets.push({ assetId, dataUrl });
+        assetIdInput.value = assetId;
+        renderEditor();
+      }
+
+      function captureAssetFromVideo() {
+        if (!videoView.videoWidth || !videoView.videoHeight) {
+          publishResult.textContent = '当前没有可截取的视频帧';
+          return;
+        }
+
+        const x = clamp01(cropXInput.value);
+        const y = clamp01(cropYInput.value);
+        const w = Math.max(0.01, Math.min(1 - x, Number(cropWInput.value) || 0.2));
+        const h = Math.max(0.01, Math.min(1 - y, Number(cropHInput.value) || 0.2));
+        const sx = Math.round(x * videoView.videoWidth);
+        const sy = Math.round(y * videoView.videoHeight);
+        const sw = Math.max(1, Math.round(w * videoView.videoWidth));
+        const sh = Math.max(1, Math.round(h * videoView.videoHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = sw;
+        canvas.height = sh;
+        canvas.getContext('2d').drawImage(videoView, sx, sy, sw, sh, 0, 0, sw, sh);
+        addAsset(nextAssetId(), canvas.toDataURL('image/png'));
+      }
+
+      async function publishPackage() {
+        let automation;
+        try {
+          automation = JSON.parse(jsonPreview.value);
+        } catch (error) {
+          publishResult.textContent = `JSON 无效: ${error.message}`;
+          return;
+        }
+
+        publishButton.disabled = true;
+        publishResult.textContent = '正在保存 ZIP...';
+        try {
+          const response = await fetch('/api/automation/packages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ automation, images: assets }),
+          });
+          const result = await response.json();
+          if (!response.ok) {
+            throw new Error(result.error || '保存失败');
+          }
+          publishResult.innerHTML = `已发布 ${result.revision.packageId || automation.packageId} r${result.revision.revision}<br>${result.revision.downloadUrl}`;
+        } catch (error) {
+          publishResult.textContent = `保存失败: ${error.message}`;
+        } finally {
+          publishButton.disabled = false;
+        }
+      }
+
+      function clearOverlay() {
+        overlay.innerHTML = '';
+      }
+
+      function drawPoint(point, label) {
+        if (!point) {
+          return;
+        }
+        const marker = document.createElement('div');
+        marker.className = 'overlay-marker';
+        marker.style.left = `${clamp01(point.x) * 100}%`;
+        marker.style.top = `${clamp01(point.y) * 100}%`;
+
+        const tag = document.createElement('div');
+        tag.className = 'overlay-label';
+        tag.style.left = marker.style.left;
+        tag.style.top = marker.style.top;
+        tag.textContent = label;
+        overlay.append(marker, tag);
+      }
+
+      function drawDrag(from, to, label) {
+        if (!from || !to) {
+          return;
+        }
+        const width = overlay.clientWidth || 1;
+        const height = overlay.clientHeight || 1;
+        const x1 = clamp01(from.x) * width;
+        const y1 = clamp01(from.y) * height;
+        const x2 = clamp01(to.x) * width;
+        const y2 = clamp01(to.y) * height;
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const line = document.createElement('div');
+        line.className = 'overlay-line';
+        line.style.left = `${x1}px`;
+        line.style.top = `${y1}px`;
+        line.style.width = `${Math.hypot(dx, dy)}px`;
+        line.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+        overlay.append(line);
+        drawPoint(from, `${label} 起点`);
+        drawPoint(to, `${label} 终点`);
+      }
+
+      function handleAutomationEvent(event) {
+        const type = event.type || 'unknown';
+        automationState.textContent = `${type}${event.stepId ? ` / ${event.stepId}` : ''}`;
+        pushAutomationLine(`${type} ${event.stepId || ''} ${event.message || ''}`);
+
+        if (type === 'tap') {
+          drawPoint(event.point, event.stepId || 'tap');
+        } else if (type === 'drag') {
+          drawDrag(event.from, event.to, event.stepId || 'drag');
+        } else if (type === 'match') {
+          drawPoint(event.point, event.stepId || 'match');
+        } else if (type === 'error') {
+          automationState.textContent = `错误: ${event.message || event.stepId || 'automation'}`;
         }
       }
 
@@ -589,11 +1184,10 @@
         const roomId = roomIdInput.value.trim() || 'demo-room';
         const token = tokenInput.value.trim();
         const url = buildSignalUrl(baseUrl, roomId, token);
-        pushLog('准备连接信令服务', { url: url.toString(), roomId, hasToken: Boolean(token) });
-
         viewerTitle.textContent = `房间 ${roomId}`;
         setConnectionText('信令连接中');
         signalingSocket = new WebSocket(url);
+        pushLog('准备连接信令服务', { url: url.toString(), roomId, hasToken: Boolean(token) });
 
         signalingSocket.onopen = () => {
           setConnectionText('信令已连接');
@@ -608,6 +1202,11 @@
             sourceId: message.sourceId,
             publisherId: message.publisherId,
           });
+
+          if (message.type === 'automation_event') {
+            handleAutomationEvent(message.event || {});
+            return;
+          }
 
           if (message.type === 'room_state') {
             setPublisherState(message.hasPublisher ? '已连接' : '未检测到');
@@ -627,45 +1226,30 @@
             viewerCount.textContent = String(message.viewerCount || 0);
             currentPublisherId = message.publisherId || null;
             setRTCText(message.hasPublisher ? '等待视频 offer' : '等待发布端');
-            pushLog('查看端已注册', { hasPublisher: message.hasPublisher, publisherId: message.publisherId });
             return;
           }
 
           if (message.type === 'signal') {
             currentPublisherId = message.sourceId;
-
             if (message.signal.type === 'offer') {
-              pushLog('收到 offer', { sourceId: message.sourceId, sdpLength: message.signal.sdp?.length || 0 });
               const connection = ensurePeerConnection(message.sourceId);
-              await connection.setRemoteDescription({
-                type: 'offer',
-                sdp: message.signal.sdp,
-              });
+              await connection.setRemoteDescription({ type: 'offer', sdp: message.signal.sdp });
               hasRemoteDescription = true;
-              pushLog('已设置远端 offer');
               await flushPendingCandidates();
-
               const answer = await connection.createAnswer();
               await connection.setLocalDescription(answer);
-              sendSignal(message.sourceId, {
-                type: 'answer',
-                sdp: answer.sdp,
-              });
+              sendSignal(message.sourceId, { type: 'answer', sdp: answer.sdp });
               setRTCText('已发送 answer，等待视频流');
-              pushLog('已创建并发送 answer', { sdpLength: answer.sdp?.length || 0 });
             }
 
             if (message.signal.type === 'candidate') {
               const candidate = new RTCIceCandidate(message.signal.candidate);
               if (peerConnection && hasRemoteDescription) {
                 await peerConnection.addIceCandidate(candidate);
-                pushLog('已添加远端 ICE candidate');
               } else {
                 pendingCandidates.push(candidate);
-                pushLog('远端 ICE candidate 已缓存', { pending: pendingCandidates.length });
               }
             }
-
             return;
           }
 
@@ -674,13 +1258,11 @@
             currentPublisherId = null;
             setPublisherState('未检测到');
             setLiveState(false);
-            pushLog('发布端已离开');
             return;
           }
 
           if (message.type === 'error') {
             setConnectionText(`错误: ${message.message}`);
-            pushLog('服务端返回错误', { message: message.message });
           }
         };
 
@@ -697,6 +1279,36 @@
           pushLog('Signaling WebSocket 已断开');
         };
       });
+
+      stepTypeInput.addEventListener('change', updateStepFields);
+      addStepButton.addEventListener('click', addStep);
+      captureAssetButton.addEventListener('click', captureAssetFromVideo);
+      clearStepsButton.addEventListener('click', () => {
+        steps = [];
+        renderEditor();
+      });
+      clearOverlayButton.addEventListener('click', () => {
+        clearOverlay();
+        automationLines = [];
+        automationLog.textContent = '等待自动化事件...';
+        automationState.textContent = '自动化未运行';
+      });
+      publishButton.addEventListener('click', publishPackage);
+      packageIdInput.addEventListener('input', renderEditor);
+      packageNameInput.addEventListener('input', renderEditor);
+
+      assetFileInput.addEventListener('change', () => {
+        const file = assetFileInput.files[0];
+        if (!file) {
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => addAsset(nextAssetId(), reader.result);
+        reader.readAsDataURL(file);
+      });
+
+      updateStepFields();
+      renderEditor();
     </script>
   </body>
-  </html>
+</html>

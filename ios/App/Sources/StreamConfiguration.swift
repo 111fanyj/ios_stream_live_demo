@@ -23,6 +23,11 @@ enum StreamDefaults {
     static let diagnosticsMicAudioSampleCountKey = "stream.diagnostics.micAudioSampleCount"
     static let diagnosticsEncodedFrameCountKey = "stream.diagnostics.encodedFrameCount"
     static let diagnosticsLastEncodedFrameAtKey = "stream.diagnostics.lastEncodedFrameAt"
+    static let automationPackageIDKey = "automation.packageID"
+    static let automationActivePackageIDKey = "automation.activePackageID"
+    static let automationActiveRevisionKey = "automation.activeRevision"
+    static let automationActivePackagePathKey = "automation.activePackagePath"
+    static let automationLastStatusKey = "automation.lastStatus"
 
     static var broadcastExtensionBundleIdentifier: String? {
         guard let appBundleIdentifier = Bundle.main.bundleIdentifier else {

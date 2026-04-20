@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		2ECD37F4DD7CFC2A71714B6B /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 0023E2CF8138D54FF9FA5FB0 /* WebRTC */; };
+		3A2B8D943F3D4372A7A90001 /* AutomationPackageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A2B8D943F3D4372A7A90002 /* AutomationPackageManager.swift */; };
+		3A2B8D943F3D4372A7A90003 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 3A2B8D943F3D4372A7A90004 /* ZIPFoundation */; };
+		3A2B8D943F3D4372A7A90007 /* AutomationRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A2B8D943F3D4372A7A90008 /* AutomationRunner.swift */; };
 		9E1BBBBC34D217321B7BC43F /* SignalProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E972055CF287A145732014E /* SignalProbe.swift */; };
 		A053E7419E213615E45D1FA7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3510887441D2C1A692423B76 /* ContentView.swift */; };
 		B000BDC324094B1C7D2A7568 /* SharedStreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B23B99ED4466182E7A740E5 /* SharedStreamConfiguration.swift */; };
@@ -45,6 +48,8 @@
 /* Begin PBXFileReference section */
 		265BD8A8443062E9F2EFA04E /* StreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamConfiguration.swift; sourceTree = "<group>"; };
 		2E972055CF287A145732014E /* SignalProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalProbe.swift; sourceTree = "<group>"; };
+		3A2B8D943F3D4372A7A90002 /* AutomationPackageManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationPackageManager.swift; sourceTree = "<group>"; };
+		3A2B8D943F3D4372A7A90008 /* AutomationRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationRunner.swift; sourceTree = "<group>"; };
 		3510887441D2C1A692423B76 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		4AF067BC4FC27BC25474BF30 /* BroadcastPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastPickerButton.swift; sourceTree = "<group>"; };
 		5C619DD5068AA1FE5923689A /* IOSStreamViewer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IOSStreamViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -55,6 +60,14 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		3A2B8D943F3D4372A7A90005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3A2B8D943F3D4372A7A90003 /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		42FC88383C44D46FBD8226EC /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -70,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				CC06E2357A43F9C902D3C27A /* SampleHandler.swift */,
+				3A2B8D943F3D4372A7A90008 /* AutomationRunner.swift */,
 				8B23B99ED4466182E7A740E5 /* SharedStreamConfiguration.swift */,
 			);
 			name = Sources;
@@ -79,6 +93,7 @@
 		8D7CEF0540E47149026C3C9E /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				3A2B8D943F3D4372A7A90002 /* AutomationPackageManager.swift */,
 				4AF067BC4FC27BC25474BF30 /* BroadcastPickerButton.swift */,
 				3510887441D2C1A692423B76 /* ContentView.swift */,
 				F8342D7852CD915F4660913F /* IOSStreamViewerApp.swift */,
@@ -115,6 +130,7 @@
 			buildConfigurationList = 5FD49C79EADF8E4F9BA0127D /* Build configuration list for PBXNativeTarget "IOSStreamViewer" */;
 			buildPhases = (
 				896A43628D4968570144D774 /* Sources */,
+				3A2B8D943F3D4372A7A90005 /* Frameworks */,
 				20005F5AD491B82B20468920 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -124,6 +140,7 @@
 			);
 			name = IOSStreamViewer;
 			packageProductDependencies = (
+				3A2B8D943F3D4372A7A90004 /* ZIPFoundation */,
 			);
 			productName = IOSStreamViewer;
 			productReference = 5C619DD5068AA1FE5923689A /* IOSStreamViewer.app */;
@@ -177,6 +194,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				831E0F795311E4D143EEA779 /* XCRemoteSwiftPackageReference "WebRTC" */,
+				3A2B8D943F3D4372A7A90006 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C16669B0E82A28EB41C9C6A5 /* Products */;
@@ -216,6 +234,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3A2B8D943F3D4372A7A90001 /* AutomationPackageManager.swift in Sources */,
 				BEA8213A82FE2F2FB91FA9BD /* BroadcastPickerButton.swift in Sources */,
 				A053E7419E213615E45D1FA7 /* ContentView.swift in Sources */,
 				E0F5C0EC9E7E41AC11B3AE8D /* IOSStreamViewerApp.swift in Sources */,
@@ -229,6 +248,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				BDF1460A791F19B8FE153136 /* SampleHandler.swift in Sources */,
+				3A2B8D943F3D4372A7A90007 /* AutomationRunner.swift in Sources */,
 				B000BDC324094B1C7D2A7568 /* SharedStreamConfiguration.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -474,6 +494,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		3A2B8D943F3D4372A7A90006 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.19;
+			};
+		};
 		831E0F795311E4D143EEA779 /* XCRemoteSwiftPackageReference "WebRTC" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/stasel/WebRTC.git";
@@ -489,6 +517,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 831E0F795311E4D143EEA779 /* XCRemoteSwiftPackageReference "WebRTC" */;
 			productName = WebRTC;
+		};
+		3A2B8D943F3D4372A7A90004 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3A2B8D943F3D4372A7A90006 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

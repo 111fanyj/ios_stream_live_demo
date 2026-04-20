@@ -6,6 +6,8 @@ struct ContentView: View {
     @State private var configuration = StreamConfiguration.load()
     @State private var diagnostics = StreamDiagnostics.load()
     @State private var signalProbe = SignalProbe()
+    @State private var automationPackageManager = AutomationPackageManager()
+    @State private var automationPackageID = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier)?.string(forKey: StreamDefaults.automationPackageIDKey) ?? "demo"
     @State private var isSaved = false
     @State private var connectionTestResult = "未测试"
     @State private var isTestingConnection = false
@@ -130,6 +132,39 @@ struct ContentView: View {
                         .frame(minHeight: 120, maxHeight: 220)
                     }
 
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("自动化方案")
+                            .font(.headline)
+
+                        Text("主 App 负责从服务端下载方案 ZIP，并缓存到 App Group。Broadcast Extension 启动后会读取 active package 本地执行。")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+
+                        TextField("Package ID，例如 demo", text: $automationPackageID)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textFieldStyle(.roundedBorder)
+
+                        Button(automationPackageManager.isDownloading ? "正在下载方案..." : "下载并设为 active package") {
+                            Task {
+                                await automationPackageManager.downloadLatest(
+                                    serverURL: configuration.serverURL,
+                                    packageId: automationPackageID
+                                )
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(automationPackageManager.isDownloading)
+
+                        Text("Active package: \(automationPackageManager.activeSummary)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        Text("方案状态: \(automationPackageManager.status)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Text("扩展诊断")
@@ -221,6 +256,7 @@ struct ContentView: View {
             .navigationTitle("Stream Viewer")
             .onAppear {
                 refreshDiagnostics()
+                automationPackageManager.refreshActiveSummary()
             }
             .task {
                 while !Task.isCancelled {
