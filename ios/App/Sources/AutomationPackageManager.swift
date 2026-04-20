@@ -60,9 +60,51 @@ final class AutomationPackageManager {
     private(set) var availablePackages: [AutomationPackageMetadata] = []
     private(set) var isDownloading = false
     private(set) var isLoadingPackageList = false
+    private(set) var isRunRequested = AutomationPackageManager.loadRunRequested()
 
     func refreshActiveSummary() {
         activeSummary = Self.loadActiveSummary()
+        isRunRequested = Self.loadRunRequested()
+    }
+
+    var hasActivePackage: Bool {
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return false
+        }
+
+        let packageId = defaults.string(forKey: StreamDefaults.automationActivePackageIDKey) ?? ""
+        return !packageId.isEmpty && defaults.integer(forKey: StreamDefaults.automationActiveRevisionKey) > 0
+    }
+
+    func requestRun() {
+        guard hasActivePackage else {
+            status = "没有 active package，先下载方案"
+            return
+        }
+
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            status = "无法访问 App Group"
+            return
+        }
+
+        let requestID = UUID().uuidString
+        defaults.set(true, forKey: StreamDefaults.automationRunRequestedKey)
+        defaults.set(requestID, forKey: StreamDefaults.automationRunRequestIDKey)
+        defaults.set("已请求执行 \(activeSummary)", forKey: StreamDefaults.automationLastStatusKey)
+        isRunRequested = true
+        status = "已请求执行 \(activeSummary)。如果广播已启动，Extension 会自动开始；否则请启动屏幕广播。"
+    }
+
+    func stopRun() {
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            status = "无法访问 App Group"
+            return
+        }
+
+        defaults.set(false, forKey: StreamDefaults.automationRunRequestedKey)
+        defaults.set("已请求停止自动化", forKey: StreamDefaults.automationLastStatusKey)
+        isRunRequested = false
+        status = "已请求停止自动化"
     }
 
     func getList(serverURL: String) async {
@@ -276,5 +318,13 @@ final class AutomationPackageManager {
         }
 
         return "\(packageId) r\(revision)"
+    }
+
+    private static func loadRunRequested() -> Bool {
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return false
+        }
+
+        return defaults.bool(forKey: StreamDefaults.automationRunRequestedKey)
     }
 }

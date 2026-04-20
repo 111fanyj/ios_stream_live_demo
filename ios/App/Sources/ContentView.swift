@@ -192,6 +192,23 @@ struct ContentView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
+                        HStack {
+                            Button("开始执行 active package") {
+                                automationPackageManager.requestRun()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!automationPackageManager.hasActivePackage)
+
+                            Button("停止执行") {
+                                automationPackageManager.stopRun()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Text("执行请求: \(automationPackageManager.isRunRequested ? "已开启" : "未开启")")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
                         Text("方案状态: \(automationPackageManager.status)")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -293,6 +310,7 @@ struct ContentView: View {
             .task {
                 while !Task.isCancelled {
                     refreshDiagnostics()
+                    automationPackageManager.refreshActiveSummary()
                     try? await Task.sleep(for: .seconds(1))
                 }
             }

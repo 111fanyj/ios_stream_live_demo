@@ -66,6 +66,9 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private var viewerPeers: [String: ViewerPeerState] = [:]
     private var peerConnectionToViewerID: [ObjectIdentifier: String] = [:]
     private var automationRunner: AutomationRunner?
+    private var loadedAutomationRequestID: String?
+    private var lastAutomationSyncAt = Date.distantPast
+    private var lastAutomationStatusEventAt = Date.distantPast
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         resetDiagnosticsSession()
@@ -83,7 +86,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         }
 
         logEvent("读取配置 server=\(configuration.serverURL) room=\(configuration.roomID) token=\(configuration.token.isEmpty ? "<empty>" : "<set>")")
-        loadAutomationRunner()
+        syncAutomationRunnerIfNeeded(force: true)
 
         guard let url = buildPublisherURL(configuration: configuration) else {
             let error = NSError(domain: "IOSStreamViewer", code: -2, userInfo: [NSLocalizedDescriptionKey: "服务端地址无效"])
@@ -124,6 +127,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         flushSampleDiagnostics(force: true)
         flushSubmittedFrameDiagnostics(force: true)
         automationRunner = nil
+        loadedAutomationRequestID = nil
         resetPeerConnections()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
@@ -144,7 +148,10 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
+        syncAutomationRunnerIfNeeded(at: now)
         automationRunner?.process(pixelBuffer: pixelBuffer, at: now)
+
+        flushAutomationStatusToWebIfNeeded(at: now)
 
         guard !viewerPeers.isEmpty else {
             if now.timeIntervalSince(lastNoViewerLogAt) >= 5 {
@@ -225,15 +232,82 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             automationRunner = try AutomationRunner.loadActive { [weak self] event in
                 self?.sendAutomationEvent(event)
             }
+            loadedAutomationRequestID = currentAutomationRequestID()
 
             let summary = automationRunner?.summary ?? "unknown"
             logEvent("已加载自动化方案: \(summary)")
             updateAutomationStatus("已加载 \(summary)")
+            sendAutomationEvent([
+                "type": "status",
+                "message": "已加载 \(summary)"
+            ])
         } catch {
             automationRunner = nil
+            loadedAutomationRequestID = nil
             logEvent("未加载自动化方案: \(error.localizedDescription)")
             updateAutomationStatus("未加载自动化方案: \(error.localizedDescription)")
+            sendAutomationEvent([
+                "type": "error",
+                "stepId": "load",
+                "message": error.localizedDescription
+            ])
         }
+    }
+
+    private func syncAutomationRunnerIfNeeded(at now: Date = Date(), force: Bool = false) {
+        guard force || now.timeIntervalSince(lastAutomationSyncAt) >= 1 else {
+            return
+        }
+
+        lastAutomationSyncAt = now
+        guard isAutomationRunRequested() else {
+            if automationRunner != nil {
+                automationRunner = nil
+                loadedAutomationRequestID = nil
+                logEvent("自动化执行已停止")
+                updateAutomationStatus("已停止自动化执行")
+                sendAutomationEvent([
+                    "type": "status",
+                    "message": "已停止自动化执行"
+                ])
+            }
+            return
+        }
+
+        let requestID = currentAutomationRequestID()
+        guard automationRunner == nil || loadedAutomationRequestID != requestID else {
+            return
+        }
+
+        loadAutomationRunner()
+    }
+
+    private func isAutomationRunRequested() -> Bool {
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return false
+        }
+
+        return defaults.bool(forKey: StreamDefaults.automationRunRequestedKey)
+    }
+
+    private func currentAutomationRequestID() -> String {
+        guard let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier) else {
+            return ""
+        }
+
+        return defaults.string(forKey: StreamDefaults.automationRunRequestIDKey) ?? ""
+    }
+
+    private func flushAutomationStatusToWebIfNeeded(at now: Date) {
+        guard automationRunner != nil, now.timeIntervalSince(lastAutomationStatusEventAt) >= 10 else {
+            return
+        }
+
+        lastAutomationStatusEventAt = now
+        sendAutomationEvent([
+            "type": "status",
+            "message": "自动化执行中"
+        ])
     }
 
     private func startPeerConnection(for viewerID: String) {

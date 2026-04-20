@@ -24,6 +24,8 @@ enum StreamDefaults {
     static let automationActivePackageIDKey = "automation.activePackageID"
     static let automationActiveRevisionKey = "automation.activeRevision"
     static let automationActivePackagePathKey = "automation.activePackagePath"
+    static let automationRunRequestedKey = "automation.runRequested"
+    static let automationRunRequestIDKey = "automation.runRequestID"
     static let automationLastStatusKey = "automation.lastStatus"
 }
 
