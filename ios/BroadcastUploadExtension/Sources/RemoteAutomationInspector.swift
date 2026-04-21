@@ -72,7 +72,7 @@ final class RemoteAutomationInspector {
         case "waitForText":
             return [
                 "itemType": step.type,
-                "ocrCandidates": collectTextCandidates(pixelBuffer: pixelBuffer)
+                "ocrCandidates": collectTextCandidates(pixelBuffer: pixelBuffer, preferredQuery: step.query)
             ]
         case "waitForImage":
             var payload: [String: Any] = [
@@ -96,7 +96,7 @@ final class RemoteAutomationInspector {
 
     func makeDebugOCRPayload(pixelBuffer: CVPixelBuffer, query: String?) -> [String: Any] {
         let normalizedQuery = (query ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let recognizedTexts = collectRecognizedTexts(pixelBuffer: pixelBuffer)
+        let recognizedTexts = collectRecognizedTexts(pixelBuffer: pixelBuffer, preferredQuery: normalizedQuery)
         let candidates = recognizedTexts.map { text in
             let matched = normalizedQuery.isEmpty ? true : matchesText(text.text, query: normalizedQuery)
             return [
@@ -120,9 +120,9 @@ final class RemoteAutomationInspector {
         ]
     }
 
-    private func collectTextCandidates(pixelBuffer: CVPixelBuffer) -> [[String: Any]] {
+    private func collectTextCandidates(pixelBuffer: CVPixelBuffer, preferredQuery: String?) -> [[String: Any]] {
         var candidates: [[String: Any]] = []
-        for text in collectRecognizedTexts(pixelBuffer: pixelBuffer) {
+        for text in collectRecognizedTexts(pixelBuffer: pixelBuffer, preferredQuery: preferredQuery) {
             candidates.append([
                 "text": text.text,
                 "confidence": text.confidence,
@@ -136,11 +136,14 @@ final class RemoteAutomationInspector {
         return candidates
     }
 
-    private func collectRecognizedTexts(pixelBuffer: CVPixelBuffer) -> [RemoteRecognizedText] {
+    private func collectRecognizedTexts(pixelBuffer: CVPixelBuffer, preferredQuery: String?) -> [RemoteRecognizedText] {
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .fast
-        request.usesLanguageCorrection = false
-        request.recognitionLanguages = ["zh-Hans", "en-US"]
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
+        if let preferredQuery = normalizedMatchText(preferredQuery), !preferredQuery.isEmpty {
+            request.customWords = [preferredQuery]
+        }
 
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         do {
@@ -179,13 +182,30 @@ final class RemoteAutomationInspector {
     }
 
     private func matchesText(_ text: String, query: String) -> Bool {
-        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalizedText.isEmpty, !normalizedQuery.isEmpty else {
+        guard let normalizedText = normalizedMatchText(text),
+              let normalizedQuery = normalizedMatchText(query),
+              !normalizedText.isEmpty,
+              !normalizedQuery.isEmpty
+        else {
             return false
         }
 
         return normalizedText.contains(normalizedQuery)
+    }
+
+    private func normalizedMatchText(_ text: String?) -> String? {
+        guard let text else {
+            return nil
+        }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        return trimmed
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "zh_Hans_CN"))
+            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
     }
 
     private func findBestImageMatch(step: AutomationStep, pixelBuffer: CVPixelBuffer) throws -> RemoteImageMatch? {

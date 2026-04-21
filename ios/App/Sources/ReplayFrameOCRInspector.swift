@@ -53,8 +53,11 @@ enum ReplayFrameOCRInspector {
 
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = false
-        request.recognitionLanguages = ["zh-Hans", "en-US"]
+        request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
+        if !trimmedQuery.isEmpty {
+            request.customWords = [trimmedQuery]
+        }
 
         let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up)
         do {

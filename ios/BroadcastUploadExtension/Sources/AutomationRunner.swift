@@ -243,9 +243,10 @@ final class AutomationRunner {
         }
 
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .fast
-        request.usesLanguageCorrection = false
-        request.recognitionLanguages = ["zh-Hans", "en-US"]
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
+        request.customWords = [query]
 
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         do {
@@ -273,12 +274,21 @@ final class AutomationRunner {
     }
 
     private func matches(text: String, query: String, mode: String) -> Bool {
+        let normalizedText = normalizeMatchText(text)
+        let normalizedQuery = normalizeMatchText(query)
         switch mode {
         case "equals":
-            return text.localizedCaseInsensitiveCompare(query) == .orderedSame
+            return normalizedText == normalizedQuery
         default:
-            return text.localizedCaseInsensitiveContains(query)
+            return normalizedText.contains(normalizedQuery)
         }
+    }
+
+    private func normalizeMatchText(_ text: String) -> String {
+        text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "zh_Hans_CN"))
+            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
     }
 
     private func findImage(step: AutomationStep, pixelBuffer: CVPixelBuffer) -> AutomationPoint? {

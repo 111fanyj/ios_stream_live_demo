@@ -292,19 +292,29 @@ function regionContainsPoint(region, point) {
 }
 
 function matchesText(text, query, mode) {
-  const rawText = String(text || '').trim();
-  const rawQuery = String(query || '').trim();
-  if (!rawText || !rawQuery) {
+  const value = normalizeMatchText(text);
+  const expected = normalizeMatchText(query);
+  if (!value || !expected) {
     return false;
   }
 
-  const value = rawText.toLocaleLowerCase();
-  const expected = rawQuery.toLocaleLowerCase();
   if (mode === 'equals') {
     return value === expected;
   }
 
   return value.includes(expected);
+}
+
+function normalizeMatchText(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+
+  return text
+    .normalize('NFKC')
+    .toLocaleLowerCase('zh-Hans-CN')
+    .replace(/\s+/g, '');
 }
 
 function resolveAutomationTarget(session, target) {
