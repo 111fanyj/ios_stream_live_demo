@@ -86,7 +86,8 @@ open IOSStreamViewer.xcodeproj
 	- 对 `waitForText`、`waitForImage`，通过 WebSocket 向 iOS Broadcast Extension 下发 `startCheckItem`、`checkNextItem`、`StopCheck` 等命令。
 	- iOS 端只返回 OCR 候选结果或图片匹配结果，不再在手机本地推进整条步骤逻辑。
 	- 服务端根据返回的基础数据完成匹配、变量保存、步骤推进和超时控制。
-7. 对 `tap`、`drag` 这类交互命令，第一版只打印在服务端控制台和浏览器控制台，不做真实触控注入。
+7. 对 `tap`、`drag` 这类交互命令，服务端现在会把动作转发给独立的 `executor` 客户端；推荐用 `esp32_c3_gpt5.4/tools/hid_room_bridge.py` 通过 USB 串口控制 ESP32，再由 ESP32 作为 BLE HID 真实操作 iPhone。
+8. 服务端只有在收到 `executor_result=ok` 之后才会推进到下一步，从而形成“动作执行 -> 屏幕观察 -> 结果确认”的闭环。
 
 ## 6. 当前实现说明
 
@@ -94,8 +95,9 @@ open IOSStreamViewer.xcodeproj
 
 - 服务端负责房间管理、鉴权、WebRTC 信令转发，以及自动化流程编排。
 - iOS Broadcast Extension 保留视频推流与基础检查原语，按 server 命令执行 OCR 或图片匹配。
+- 真实点击、拖拽由独立 executor 执行，当前推荐实现是 ESP32 BLE HID + USB 串口 bridge。
 - Web 前端可以选择方案并开始、停止执行，同时继续保留编辑和发布 ZIP 的能力。
-- 真实点击、拖拽注入尚未接入，当前只打印命令，便于先把协议和调度链路跑通。
+- 浏览器工作台会显示 publisher、executor 是否在线，以及最近一次动作请求和动作结果。
 
 如果你后续要升级为生产可用版本，建议下一步替换为：
 

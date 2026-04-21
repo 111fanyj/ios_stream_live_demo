@@ -474,7 +474,7 @@
       <header class="topbar">
         <div>
           <h1>iOS 自动化直播工作台</h1>
-          <p class="subtitle">连接 iOS 屏幕直播，编辑识别和点击流程，发布给 iOS 本地执行。</p>
+          <p class="subtitle">连接 iOS 屏幕直播，由 iOS 负责识别反馈，由 ESP32 HID 执行动作，服务端负责闭环编排。</p>
         </div>
         <div class="topbar-actions">
           <span class="badge"><span id="statusDot" class="dot"></span><span id="statusLabel">等待直播</span></span>
@@ -502,8 +502,11 @@
           <div class="meta">
             <div>信令状态: <strong id="connectionState">未连接</strong></div>
             <div>发布端状态: <strong id="publisherState">未检测到</strong></div>
+            <div>执行端状态: <strong id="executorState">未检测到</strong></div>
             <div>WebRTC 状态: <strong id="rtcState">未建立</strong></div>
             <div>查看人数: <strong id="viewerCount">0</strong></div>
+            <div>最近动作请求: <strong id="lastExecutorRequest">暂无</strong></div>
+            <div>最近动作结果: <strong id="lastExecutorResult">暂无</strong></div>
             <div>视频信息: <strong id="lastFrameMeta">暂无</strong></div>
           </div>
 
@@ -570,6 +573,7 @@
               <button id="startExecutionButton" type="button">开始执行</button>
               <button id="stopExecutionButton" class="secondary" type="button">停止执行</button>
             </div>
+            <div id="executionPrereq" class="meta">先连接查看端</div>
             <div id="executionResult" class="meta">未开始执行</div>
           </section>
 
@@ -754,8 +758,11 @@
       const connectButton = document.getElementById('connectButton');
       const connectionState = document.getElementById('connectionState');
       const publisherState = document.getElementById('publisherState');
+      const executorState = document.getElementById('executorState');
       const rtcState = document.getElementById('rtcState');
       const viewerCount = document.getElementById('viewerCount');
+      const lastExecutorRequest = document.getElementById('lastExecutorRequest');
+      const lastExecutorResult = document.getElementById('lastExecutorResult');
       const lastFrameMeta = document.getElementById('lastFrameMeta');
       const videoView = document.getElementById('videoView');
       const videoShell = document.getElementById('videoShell');
@@ -779,6 +786,7 @@
       const executionRevisionSelect = document.getElementById('executionRevisionSelect');
       const startExecutionButton = document.getElementById('startExecutionButton');
       const stopExecutionButton = document.getElementById('stopExecutionButton');
+      const executionPrereq = document.getElementById('executionPrereq');
       const executionResult = document.getElementById('executionResult');
       const stepTypeInput = document.getElementById('stepTypeInput');
       const stepIdInput = document.getElementById('stepIdInput');
@@ -832,6 +840,8 @@
       let executionPackages = [];
       let activeExecutionSessionId = null;
       let isExecutionRunning = false;
+      let roomHasPublisher = false;
+      let roomHasExecutor = false;
 
       serverUrlInput.value = window.location.origin;
 
@@ -872,6 +882,18 @@
 
       function setPublisherState(text) {
         publisherState.textContent = text;
+      }
+
+      function setExecutorState(text) {
+        executorState.textContent = text;
+      }
+
+      function setLastExecutorRequest(text) {
+        lastExecutorRequest.textContent = text;
+      }
+
+      function setLastExecutorResult(text) {
+        lastExecutorResult.textContent = text;
       }
 
       function setConnectionText(text) {
@@ -953,6 +975,13 @@
         closePeerConnection();
         closeSocket();
         currentPublisherId = null;
+        roomHasPublisher = false;
+        roomHasExecutor = false;
+        setPublisherState('未检测到');
+        setExecutorState('未检测到');
+        setLastExecutorRequest('暂无');
+        setLastExecutorResult('暂无');
+        viewerCount.textContent = '0';
       }
 
       function attachRemoteTrack(track, streams) {
@@ -1262,8 +1291,30 @@
         const hasSocket = signalingSocket && signalingSocket.readyState === WebSocket.OPEN;
         const hasPackage = Boolean(executionPackageSelect.value);
         const hasRevision = Boolean(executionRevisionSelect.value);
-        startExecutionButton.disabled = !hasSocket || !hasPackage || !hasRevision || isExecutionRunning;
+        startExecutionButton.disabled = !hasSocket || !hasPackage || !hasRevision || !roomHasPublisher || !roomHasExecutor || isExecutionRunning;
         stopExecutionButton.disabled = !hasSocket || !isExecutionRunning;
+
+        if (!hasSocket) {
+          executionPrereq.textContent = '先连接查看端';
+          return;
+        }
+
+        if (!roomHasPublisher) {
+          executionPrereq.textContent = '等待 publisher 连接';
+          return;
+        }
+
+        if (!roomHasExecutor) {
+          executionPrereq.textContent = '等待 executor 连接';
+          return;
+        }
+
+        if (!hasPackage || !hasRevision) {
+          executionPrereq.textContent = '选择可执行方案与 revision';
+          return;
+        }
+
+        executionPrereq.textContent = isExecutionRunning ? '当前会话执行中' : '执行条件已满足';
       }
 
       function renderExecutionRevisions() {
@@ -1363,8 +1414,21 @@
 
       function handleAutomationAction(message) {
         console.log('[automation_action]', message);
-        const summary = `${message.action || 'action'} ${message.stepId || ''}`.trim();
+        const requestId = message.command?.requestId || 'unknown';
+        const summary = `${message.action || 'action'} ${message.stepId || ''} / ${requestId}`.trim();
+        setLastExecutorRequest(summary);
         pushAutomationLine(`[action] ${summary}`);
+      }
+
+      function handleExecutorResult(message) {
+        console.log('[executor_result]', message);
+        const summary = `${message.action || 'action'} ${message.status || 'unknown'} ${message.stepId || ''} / ${message.requestId || 'unknown'}`.trim();
+        setLastExecutorRequest(`${message.action || 'action'} / ${message.requestId || 'unknown'}`);
+        setLastExecutorResult(summary);
+        pushAutomationLine(`[executor] ${summary}`);
+        if (message.status !== 'ok') {
+          automationState.textContent = `执行失败: ${message.action || 'action'}`;
+        }
       }
 
       function startExecution() {
@@ -1698,24 +1762,37 @@
             return;
           }
 
+          if (message.type === 'executor_result') {
+            handleExecutorResult(message);
+            return;
+          }
+
           if (message.type === 'room_state') {
-            setPublisherState(message.hasPublisher ? '已连接' : '未检测到');
+            roomHasPublisher = Boolean(message.hasPublisher);
+            roomHasExecutor = Boolean(message.hasExecutor);
+            setPublisherState(roomHasPublisher ? '已连接' : '未检测到');
+            setExecutorState(roomHasExecutor ? '已连接' : '未检测到');
             viewerCount.textContent = String(message.viewerCount || 0);
             if (message.publisherId) {
               currentPublisherId = message.publisherId;
             }
-            if (!message.hasPublisher) {
+            if (!roomHasPublisher) {
               closePeerConnection();
               setLiveState(false);
             }
+            updateExecutionControls();
             return;
           }
 
           if (message.type === 'viewer_ready') {
-            setPublisherState(message.hasPublisher ? '已连接' : '未检测到');
+            roomHasPublisher = Boolean(message.hasPublisher);
+            roomHasExecutor = Boolean(message.hasExecutor);
+            setPublisherState(roomHasPublisher ? '已连接' : '未检测到');
+            setExecutorState(roomHasExecutor ? '已连接' : '未检测到');
             viewerCount.textContent = String(message.viewerCount || 0);
             currentPublisherId = message.publisherId || null;
             setRTCText(message.hasPublisher ? '等待视频 offer' : '等待发布端');
+            updateExecutionControls();
             return;
           }
 
@@ -1765,9 +1842,12 @@
           closePeerConnection();
           setConnectionText('已断开');
           setPublisherState('未检测到');
+          setExecutorState('未检测到');
           setLiveState(false);
           activeExecutionSessionId = null;
           isExecutionRunning = false;
+          roomHasPublisher = false;
+          roomHasExecutor = false;
           updateExecutionControls();
           pushLog('Signaling WebSocket 已断开');
         };

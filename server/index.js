@@ -52,9 +52,11 @@ function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     rooms.set(roomId, {
       publisher: null,
+      executor: null,
       viewers: new Map(),
       probes: new Map(),
-      publisherConnectedAt: null
+      publisherConnectedAt: null,
+      executorConnectedAt: null
     });
   }
 
@@ -73,6 +75,10 @@ function getViewerIds(room) {
 
 function getProbeIds(room) {
   return Array.from(room.probes.keys());
+}
+
+function getExecutorId(room) {
+  return room.executor?.clientId ?? null;
 }
 
 function getClientById(room, clientId) {
@@ -94,9 +100,12 @@ function broadcastRoomState(roomId) {
     roomId,
     hasPublisher: Boolean(room.publisher),
     publisherId: room.publisher?.clientId ?? null,
+    hasExecutor: Boolean(room.executor),
+    executorId: getExecutorId(room),
     viewerCount: room.viewers.size,
     probeCount: room.probes.size,
     publisherConnectedAt: room.publisherConnectedAt,
+    executorConnectedAt: room.executorConnectedAt,
     transport: 'webrtc-video-track'
   });
 
@@ -104,6 +113,8 @@ function broadcastRoomState(roomId) {
     roomId,
     hasPublisher: Boolean(room.publisher),
     publisherId: room.publisher?.clientId ?? null,
+    hasExecutor: Boolean(room.executor),
+    executorId: getExecutorId(room),
     viewerCount: room.viewers.size,
     viewerIds: getViewerIds(room),
     probeCount: room.probes.size,
@@ -125,6 +136,10 @@ function broadcastRoomState(roomId) {
   if (room.publisher?.readyState === WebSocket.OPEN) {
     room.publisher.send(payload);
   }
+
+  if (room.executor?.readyState === WebSocket.OPEN) {
+    room.executor.send(payload);
+  }
 }
 
 function safeSend(ws, payload) {
@@ -144,6 +159,16 @@ function sendToPublisher(roomId, payload) {
   }
 
   publisher.send(JSON.stringify(payload));
+  return true;
+}
+
+function sendToExecutor(roomId, payload) {
+  const executor = getRoom(roomId).executor;
+  if (!isClientOpen(executor)) {
+    return false;
+  }
+
+  executor.send(JSON.stringify(payload));
   return true;
 }
 
@@ -248,13 +273,21 @@ function clearAutomationTimer(session) {
   }
 }
 
-function clearPendingCommand(session) {
-  if (session?.pendingCommand?.timeoutHandle) {
-    clearTimeout(session.pendingCommand.timeoutHandle);
+function clearPendingSessionCommand(session, key) {
+  if (session?.[key]?.timeoutHandle) {
+    clearTimeout(session[key].timeoutHandle);
   }
   if (session) {
-    session.pendingCommand = null;
+    session[key] = null;
   }
+}
+
+function clearPendingPublisherCommand(session) {
+  clearPendingSessionCommand(session, 'pendingPublisherCommand');
+}
+
+function clearPendingExecutorCommand(session) {
+  clearPendingSessionCommand(session, 'pendingExecutorCommand');
 }
 
 function broadcastAutomationPayload(roomId, payload) {
@@ -338,6 +371,33 @@ function broadcastAutomationAction(session, step, action, command) {
     action,
     stepId: step.id,
     command
+  });
+}
+
+function broadcastExecutorResult(session, result) {
+  const payload = {
+    type: 'executor_result',
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    ownerViewerId: session.ownerViewerId,
+    packageId: session.packageId,
+    revision: session.revision,
+    stepId: result.stepId ?? null,
+    requestId: result.requestId,
+    action: result.action,
+    status: result.status,
+    payload: result.payload,
+    error: result.error ?? null
+  };
+
+  broadcastAutomationPayload(session.roomId, payload);
+  log('executor_result_broadcast', {
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    requestId: result.requestId,
+    action: result.action,
+    status: result.status,
+    stepId: result.stepId ?? null
   });
 }
 
@@ -580,52 +640,91 @@ function scheduleAutomationStep(session, delayMs) {
   }, Math.max(0, delayMs));
 }
 
-function dispatchAutomationCommand(session, method, payload, options = {}) {
+function dispatchSessionCommand(session, commandKey, send, messageType, nameField, nameValue, payload, options = {}) {
   const requestId = makeAutomationId('automation-request');
   const timeoutMs = Math.max(1_000, Number(options.timeoutMs) || 12_000);
   const command = {
-    type: 'automation_command',
+    type: messageType,
     roomId: session.roomId,
     sessionId: session.sessionId,
     requestId,
-    method,
+    [nameField]: nameValue,
     packageId: session.packageId,
     revision: session.revision,
     stepId: options.stepId ?? null,
     payload
   };
 
-  clearPendingCommand(session);
-  if (!sendToPublisher(session.roomId, command)) {
-    throw makeStatusError('Publisher is unavailable', 409);
+  clearPendingSessionCommand(session, commandKey);
+  if (!send(session.roomId, command)) {
+    throw makeStatusError(options.unavailableMessage || '目标端不可用', 409);
   }
 
   const timeoutHandle = setTimeout(() => {
     const activeSession = getAutomationSession(session.roomId, session.sessionId);
-    if (!activeSession || activeSession.pendingCommand?.requestId !== requestId) {
+    if (!activeSession || activeSession[commandKey]?.requestId !== requestId) {
       return;
     }
 
-    finalizeAutomationSession(activeSession.roomId, 'error', `方法 ${method} 超时`, {
+    finalizeAutomationSession(activeSession.roomId, 'error', `${options.timeoutLabel || nameValue} 超时`, {
       stepId: options.stepId ?? null,
-      sendStopCommand: false
+      sendStopCommand: options.sendStopCommandOnTimeout
     });
   }, timeoutMs);
 
-  session.pendingCommand = {
+  session[commandKey] = {
     requestId,
-    method,
+    [nameField]: nameValue,
     stepId: options.stepId ?? null,
-    timeoutHandle
+    timeoutHandle,
+    nextDelayMs: Math.max(0, Number(options.nextDelayMs) || 0)
   };
 
-  log('automation_command_dispatched', {
+  log(`${messageType}_dispatched`, {
     roomId: session.roomId,
     sessionId: session.sessionId,
-    method,
+    [nameField]: nameValue,
     requestId,
     stepId: options.stepId ?? null
   });
+
+  return requestId;
+}
+
+function dispatchPublisherCommand(session, method, payload, options = {}) {
+  return dispatchSessionCommand(
+    session,
+    'pendingPublisherCommand',
+    sendToPublisher,
+    'automation_command',
+    'method',
+    method,
+    payload,
+    {
+      unavailableMessage: 'Publisher is unavailable',
+      sendStopCommandOnTimeout: false,
+      timeoutLabel: `方法 ${method}`,
+      ...options
+    }
+  );
+}
+
+function dispatchExecutorCommand(session, action, payload, options = {}) {
+  return dispatchSessionCommand(
+    session,
+    'pendingExecutorCommand',
+    sendToExecutor,
+    'executor_command',
+    'action',
+    action,
+    payload,
+    {
+      unavailableMessage: 'Executor is unavailable',
+      sendStopCommandOnTimeout: true,
+      timeoutLabel: `动作 ${action}`,
+      ...options
+    }
+  );
 }
 
 function finalizeAutomationSession(roomId, status, message, options = {}) {
@@ -635,7 +734,8 @@ function finalizeAutomationSession(roomId, status, message, options = {}) {
   }
 
   clearAutomationTimer(session);
-  clearPendingCommand(session);
+  clearPendingPublisherCommand(session);
+  clearPendingExecutorCommand(session);
   automationSessions.delete(roomId);
 
   if (options.sendStopCommand !== false) {
@@ -788,7 +888,7 @@ function handleCheckNextItemResult(session, payload, responseStepId) {
 }
 
 function executeAutomationStep(session) {
-  if (session.pendingCommand) {
+  if (session.pendingPublisherCommand || session.pendingExecutorCommand) {
     return;
   }
 
@@ -818,15 +918,12 @@ function executeAutomationStep(session) {
       return;
     }
 
-    console.log('[automation_action]', JSON.stringify({
-      sessionId: session.sessionId,
+    const requestId = dispatchExecutorCommand(session, 'tap', { point }, {
       stepId: step.id,
-      action: 'tap',
-      point
-    }));
-    broadcastAutomationAction(session, step, 'tap', { point });
-    session.currentStepIndex += 1;
-    scheduleAutomationStep(session, 0);
+      timeoutMs: 15_000,
+      nextDelayMs: Number(step.postActionDelayMs) || 350
+    });
+    broadcastAutomationAction(session, step, 'tap', { point, requestId });
     return;
   }
 
@@ -846,15 +943,15 @@ function executeAutomationStep(session) {
       holdMs: Number(step.holdMs) || 120,
       durationMs: Number(step.durationMs) || 450
     };
-    console.log('[automation_action]', JSON.stringify({
-      sessionId: session.sessionId,
+    const requestId = dispatchExecutorCommand(session, 'drag', command, {
       stepId: step.id,
-      action: 'drag',
-      ...command
-    }));
-    broadcastAutomationAction(session, step, 'drag', command);
-    session.currentStepIndex += 1;
-    scheduleAutomationStep(session, 0);
+      timeoutMs: Math.max(15_000, command.durationMs + command.holdMs + 5_000),
+      nextDelayMs: Number(step.postActionDelayMs) || 500
+    });
+    broadcastAutomationAction(session, step, 'drag', {
+      ...command,
+      requestId
+    });
     return;
   }
 
@@ -900,7 +997,7 @@ function executeAutomationStep(session) {
       elapsedMs
     }
   });
-  dispatchAutomationCommand(session, 'checkNextItem', payload, {
+  dispatchPublisherCommand(session, 'checkNextItem', payload, {
     stepId: step.id,
     timeoutMs: Math.max(5_000, Number(step.pollIntervalMs) || 5000)
   });
@@ -910,6 +1007,9 @@ async function startAutomationSession(roomId, viewer, packageId, revision) {
   const room = getRoom(roomId);
   if (!isClientOpen(room.publisher)) {
     throw makeStatusError('当前房间没有可用的 publisher', 409);
+  }
+  if (!isClientOpen(room.executor)) {
+    throw makeStatusError('当前房间没有可用的 executor', 409);
   }
 
   const bundle = await loadAutomationBundle(packageId, revision);
@@ -929,14 +1029,15 @@ async function startAutomationSession(roomId, viewer, packageId, revision) {
     variables: {},
     currentStepIndex: 0,
     waitState: null,
-    pendingCommand: null,
+    pendingPublisherCommand: null,
+    pendingExecutorCommand: null,
     timer: null,
     createdAt: new Date().toISOString()
   };
 
   automationSessions.set(roomId, session);
   broadcastAutomationStatus(session, 'starting', `准备启动 ${session.packageId} r${session.revision}`);
-  dispatchAutomationCommand(session, 'startCheckItem', {
+  dispatchPublisherCommand(session, 'startCheckItem', {
     packageId: session.packageId,
     revision: session.revision,
     stepCount: session.document.steps.length
@@ -969,7 +1070,7 @@ function handleAutomationResult(roomId, message) {
     return;
   }
 
-  const pendingCommand = session.pendingCommand;
+  const pendingCommand = session.pendingPublisherCommand;
   if (!pendingCommand || pendingCommand.requestId !== message.requestId || pendingCommand.method !== message.method) {
     log('automation_result_ignored', {
       roomId,
@@ -981,7 +1082,7 @@ function handleAutomationResult(roomId, message) {
     return;
   }
 
-  clearPendingCommand(session);
+  clearPendingPublisherCommand(session);
 
   if (message.status !== 'ok') {
     finalizeAutomationSession(session.roomId, 'error', message.error || `方法 ${message.method} 执行失败`, {
@@ -1000,6 +1101,65 @@ function handleAutomationResult(roomId, message) {
   if (message.method === 'checkNextItem') {
     handleCheckNextItemResult(session, message.payload || {}, message.stepId || pendingCommand.stepId || null);
   }
+}
+
+function handleExecutorResult(roomId, message) {
+  const session = getAutomationSession(roomId, message.sessionId);
+  if (!session) {
+    log('executor_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      requestId: message.requestId,
+      action: message.action,
+      reason: 'session_not_found'
+    });
+    return;
+  }
+
+  const pendingCommand = session.pendingExecutorCommand;
+  if (!pendingCommand || pendingCommand.requestId !== message.requestId || pendingCommand.action !== message.action) {
+    log('executor_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      requestId: message.requestId,
+      action: message.action,
+      reason: 'request_mismatch'
+    });
+    return;
+  }
+
+  clearPendingExecutorCommand(session);
+  broadcastExecutorResult(session, {
+    requestId: message.requestId,
+    action: message.action,
+    stepId: message.stepId || pendingCommand.stepId || null,
+    status: message.status,
+    payload: message.payload || null,
+    error: message.error || null
+  });
+
+  if (message.status !== 'ok') {
+    finalizeAutomationSession(session.roomId, 'error', message.error || `动作 ${message.action} 执行失败`, {
+      stepId: message.stepId || pendingCommand.stepId || null
+    });
+    return;
+  }
+
+  const step = session.document.steps[session.currentStepIndex];
+  if (!step || step.id !== (message.stepId || pendingCommand.stepId || step.id)) {
+    finalizeAutomationSession(session.roomId, 'error', `动作结果与当前步骤不一致`, {
+      stepId: message.stepId || pendingCommand.stepId || null,
+      sendStopCommand: false
+    });
+    return;
+  }
+
+  broadcastAutomationStatus(session, 'running', `动作 ${message.action} 已完成`, {
+    stepId: step.id,
+    detail: message.payload || null
+  });
+  session.currentStepIndex += 1;
+  scheduleAutomationStep(session, pendingCommand.nextDelayMs || 0);
 }
 
 function broadcastAutomationEvent(roomId, source, event) {
@@ -1038,9 +1198,11 @@ app.get('/health', (_req, res) => {
   const roomSummary = Array.from(rooms.entries()).map(([roomId, room]) => ({
     roomId,
     hasPublisher: Boolean(room.publisher),
+    hasExecutor: Boolean(room.executor),
     viewerCount: room.viewers.size,
     probeCount: room.probes.size,
     publisherConnectedAt: room.publisherConnectedAt,
+    executorConnectedAt: room.executorConnectedAt,
     transport: 'webrtc-video-track'
   }));
 
@@ -1151,7 +1313,7 @@ wss.on('connection', (ws, req) => {
     userAgent: req.headers['user-agent'] ?? 'unknown'
   });
 
-  if (!clientType || !['publisher', 'viewer', 'probe'].includes(clientType)) {
+  if (!clientType || !['publisher', 'viewer', 'probe', 'executor'].includes(clientType)) {
     log('client_rejected', { reason: 'invalid_client_type', clientType, roomId });
     safeSend(ws, { type: 'error', message: 'Missing or invalid client type' });
     ws.close();
@@ -1197,6 +1359,27 @@ wss.on('connection', (ws, req) => {
     }
 
     broadcastRoomState(roomId);
+  } else if (clientType === 'executor') {
+    if (room.executor && room.executor.readyState === WebSocket.OPEN) {
+      safeSend(room.executor, { type: 'warning', message: 'Executor replaced by a new connection' });
+      room.executor.close();
+    }
+
+    room.executor = ws;
+    room.executorConnectedAt = new Date().toISOString();
+
+    safeSend(ws, {
+      type: 'executor_ready',
+      clientId: ws.clientId,
+      roomId,
+      hasPublisher: Boolean(room.publisher),
+      publisherId: room.publisher?.clientId ?? null,
+      viewerCount: room.viewers.size,
+      probeCount: room.probes.size,
+      transport: 'webrtc-video-track'
+    });
+
+    broadcastRoomState(roomId);
   } else if (clientType === 'viewer') {
     room.viewers.set(ws.clientId, ws);
     safeSend(ws, {
@@ -1205,6 +1388,8 @@ wss.on('connection', (ws, req) => {
       roomId,
       hasPublisher: Boolean(room.publisher),
       publisherId: room.publisher?.clientId ?? null,
+      hasExecutor: Boolean(room.executor),
+      executorId: getExecutorId(room),
       viewerCount: room.viewers.size,
       transport: 'webrtc-video-track'
     });
@@ -1225,6 +1410,8 @@ wss.on('connection', (ws, req) => {
       roomId,
       hasPublisher: Boolean(room.publisher),
       publisherId: room.publisher?.clientId ?? null,
+      hasExecutor: Boolean(room.executor),
+      executorId: getExecutorId(room),
       viewerCount: room.viewers.size,
       probeCount: room.probes.size,
       transport: 'webrtc-video-track'
@@ -1287,6 +1474,22 @@ wss.on('connection', (ws, req) => {
       return;
     }
 
+    if (message.type === 'executor_result') {
+      if (ws.clientType !== 'executor') {
+        log('executor_result_rejected', {
+          roomId: ws.roomId,
+          clientId: ws.clientId,
+          clientType: ws.clientType,
+          reason: 'executor_only'
+        });
+        safeSend(ws, { type: 'error', message: 'Only executor clients can send executor results' });
+        return;
+      }
+
+      handleExecutorResult(ws.roomId, message);
+      return;
+    }
+
     if (message.type === 'automation_start') {
       if (ws.clientType !== 'viewer') {
         safeSend(ws, { type: 'warning', message: 'Only viewer clients can start automation' });
@@ -1342,13 +1545,19 @@ wss.on('connection', (ws, req) => {
       return;
     }
 
-    if (ws.clientType === 'probe') {
+    if (ws.clientType === 'probe' || ws.clientType === 'executor') {
       log('probe_message_ignored', {
         roomId: ws.roomId,
         clientId: ws.clientId,
+        clientType: ws.clientType,
         size: rawMessage.length ?? rawMessage.toString().length
       });
-      safeSend(ws, { type: 'warning', message: 'Probe clients do not participate in signaling' });
+      safeSend(ws, {
+        type: 'warning',
+        message: ws.clientType === 'executor'
+          ? 'Executor clients do not participate in signaling'
+          : 'Probe clients do not participate in signaling'
+      });
       return;
     }
 
@@ -1485,7 +1694,16 @@ wss.on('connection', (ws, req) => {
       currentRoom.probes.delete(ws.clientId);
     }
 
-    if (!currentRoom.publisher && currentRoom.viewers.size === 0 && currentRoom.probes.size === 0) {
+    if (ws.clientType === 'executor' && currentRoom.executor === ws) {
+      currentRoom.executor = null;
+      currentRoom.executorConnectedAt = null;
+
+      if (automationSessions.has(ws.roomId)) {
+        finalizeAutomationSession(ws.roomId, 'error', 'Executor 已断开');
+      }
+    }
+
+    if (!currentRoom.publisher && !currentRoom.executor && currentRoom.viewers.size === 0 && currentRoom.probes.size === 0) {
       log('room_removed', { roomId: ws.roomId });
       rooms.delete(ws.roomId);
       return;
@@ -1496,6 +1714,7 @@ wss.on('connection', (ws, req) => {
       roomId: ws.roomId,
       clientId: ws.clientId,
       hasPublisher: Boolean(currentRoom.publisher),
+      hasExecutor: Boolean(currentRoom.executor),
       viewers: currentRoom.viewers.size,
       probes: currentRoom.probes.size
     });
