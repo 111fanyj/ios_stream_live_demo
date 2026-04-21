@@ -1406,10 +1406,32 @@
         }
 
         const summary = `${message.status || 'unknown'} ${message.stepId || ''} ${message.message || ''}`.trim();
-        executionResult.textContent = summary || '执行状态已更新';
-        automationState.textContent = summary || '远程执行中';
-        pushAutomationLine(`[server] ${summary}`.trim());
+        const detailSummary = formatAutomationStatusDetail(message);
+        const text = detailSummary ? `${summary} / ${detailSummary}` : summary;
+        executionResult.textContent = text || '执行状态已更新';
+        automationState.textContent = text || '远程执行中';
+        pushAutomationLine(`[server] ${text || summary}`.trim());
         updateExecutionControls();
+      }
+
+      function formatAutomationStatusDetail(message) {
+        const detail = message?.detail;
+        const bestImageMatch = detail?.payload?.bestImageMatch;
+        const score = Number(bestImageMatch?.score);
+        if (!Number.isFinite(score)) {
+          return '';
+        }
+
+        const threshold = Number(detail?.threshold);
+        const scaleMultiplier = Number(bestImageMatch?.scaleMultiplier);
+        const segments = [`score ${score.toFixed(3)}`];
+        if (Number.isFinite(threshold)) {
+          segments[0] = `${segments[0]} / ${threshold.toFixed(3)}`;
+        }
+        if (Number.isFinite(scaleMultiplier)) {
+          segments.push(`scale ${scaleMultiplier.toFixed(2)}`);
+        }
+        return segments.join(' ');
       }
 
       function handleAutomationAction(message) {

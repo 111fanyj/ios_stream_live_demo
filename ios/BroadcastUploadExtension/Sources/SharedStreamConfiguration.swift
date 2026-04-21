@@ -2,6 +2,8 @@ import Foundation
 
 enum StreamDefaults {
     static let appGroupIdentifier = "group.com.example.IOSStreamViewer.shared"
+    static let latestReplayFrameRelativePath = "Replay/latest-frame.jpg"
+    static let latestReplayFrameUpdatedAtKey = "stream.latestReplayFrame.updatedAt"
     static let serverURLKey = "stream.serverURL"
     static let roomIDKey = "stream.roomID"
     static let tokenKey = "stream.token"
@@ -25,6 +27,14 @@ enum StreamDefaults {
     static let automationActiveRevisionKey = "automation.activeRevision"
     static let automationActivePackagePathKey = "automation.activePackagePath"
     static let automationLastStatusKey = "automation.lastStatus"
+
+    static func appGroupContainerURL() -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
+    }
+
+    static func latestReplayFrameURL() -> URL? {
+        appGroupContainerURL()?.appendingPathComponent(latestReplayFrameRelativePath)
+    }
 }
 
 struct StreamConfiguration {

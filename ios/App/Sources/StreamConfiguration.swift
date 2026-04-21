@@ -3,6 +3,8 @@ import Foundation
 enum StreamDefaults {
     static let appGroupIdentifier = "group.com.example.IOSStreamViewer.shared"
     static let broadcastExtensionSuffix = ".BroadcastUploadExtension"
+    static let latestReplayFrameRelativePath = "Replay/latest-frame.jpg"
+    static let latestReplayFrameUpdatedAtKey = "stream.latestReplayFrame.updatedAt"
     static let serverURLKey = "stream.serverURL"
     static let roomIDKey = "stream.roomID"
     static let tokenKey = "stream.token"
@@ -35,6 +37,14 @@ enum StreamDefaults {
         }
 
         return appBundleIdentifier + broadcastExtensionSuffix
+    }
+
+    static func appGroupContainerURL() -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
+    }
+
+    static func latestReplayFrameURL() -> URL? {
+        appGroupContainerURL()?.appendingPathComponent(latestReplayFrameRelativePath)
     }
 }
 

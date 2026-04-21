@@ -14,6 +14,7 @@ private struct RemoteGrayscaleImage {
 private struct RemoteImageMatch {
     let point: AutomationPoint
     let score: Double
+    let scaleMultiplier: Double
 }
 
 final class RemoteAutomationInspector {
@@ -76,7 +77,8 @@ final class RemoteAutomationInspector {
                         "x": match.point.x,
                         "y": match.point.y
                     ],
-                    "score": match.score
+                    "score": match.score,
+                    "scaleMultiplier": match.scaleMultiplier
                 ]
             }
             return payload
@@ -129,51 +131,108 @@ final class RemoteAutomationInspector {
         let sourceWidth = max(1, CVPixelBufferGetWidth(pixelBuffer))
         let sourceHeight = max(1, CVPixelBufferGetHeight(pixelBuffer))
         let frameLongEdge = max(sourceWidth, sourceHeight)
-        let scale = min(1.0, 240.0 / Double(frameLongEdge))
+        let scale = min(1.0, 320.0 / Double(frameLongEdge))
         let frameWidth = max(2, Int(Double(sourceWidth) * scale))
         let frameHeight = max(2, Int(Double(sourceHeight) * scale))
-        let templateWidth = max(4, Int(Double(templateImage.width) * scale))
-        let templateHeight = max(4, Int(Double(templateImage.height) * scale))
 
-        guard let frame = makeGrayscale(from: frameImage, width: frameWidth, height: frameHeight),
-              let template = makeGrayscale(from: templateImage, width: templateWidth, height: templateHeight),
-              template.width <= frame.width,
-              template.height <= frame.height
+        guard let frame = makeGrayscale(from: frameImage, width: frameWidth, height: frameHeight)
         else {
             return nil
         }
 
-        var bestScore = -Double.greatestFiniteMagnitude
-        var bestX = 0
-        var bestY = 0
-        let scanStep = 3
+        var bestMatch: RemoteImageMatch?
+        for candidate in templateCandidates(
+            templateImage: templateImage,
+            baseScale: scale,
+            frameWidth: frame.width,
+            frameHeight: frame.height
+        ) {
+            guard let template = makeGrayscale(
+                from: templateImage,
+                width: candidate.width,
+                height: candidate.height
+            ) else {
+                continue
+            }
 
-        let minX = Int((step.region?.x ?? 0) * Double(frame.width))
-        let minY = Int((step.region?.y ?? 0) * Double(frame.height))
-        let maxX = Int(((step.region?.x ?? 0) + (step.region?.width ?? 1)) * Double(frame.width)) - template.width
-        let maxY = Int(((step.region?.y ?? 0) + (step.region?.height ?? 1)) * Double(frame.height)) - template.height
+            let scanStep = imageScanStep(for: template)
+            let minX = Int((step.region?.x ?? 0) * Double(frame.width))
+            let minY = Int((step.region?.y ?? 0) * Double(frame.height))
+            let maxX = Int(((step.region?.x ?? 0) + (step.region?.width ?? 1)) * Double(frame.width)) - template.width
+            let maxY = Int(((step.region?.y ?? 0) + (step.region?.height ?? 1)) * Double(frame.height)) - template.height
 
-        for y in stride(from: max(0, minY), through: max(0, min(frame.height - template.height, maxY)), by: scanStep) {
-            for x in stride(from: max(0, minX), through: max(0, min(frame.width - template.width, maxX)), by: scanStep) {
-                let score = similarity(frame: frame, template: template, originX: x, originY: y)
-                if score > bestScore {
-                    bestScore = score
-                    bestX = x
-                    bestY = y
+            var bestScore = -Double.greatestFiniteMagnitude
+            var bestX = 0
+            var bestY = 0
+            for y in stride(from: max(0, minY), through: max(0, min(frame.height - template.height, maxY)), by: scanStep) {
+                for x in stride(from: max(0, minX), through: max(0, min(frame.width - template.width, maxX)), by: scanStep) {
+                    let score = similarity(frame: frame, template: template, originX: x, originY: y)
+                    if score > bestScore {
+                        bestScore = score
+                        bestX = x
+                        bestY = y
+                    }
                 }
+            }
+
+            guard bestScore > -Double.greatestFiniteMagnitude else {
+                continue
+            }
+
+            let centerX = (Double(bestX) + Double(template.width) / 2.0) / Double(frame.width)
+            let centerY = (Double(bestY) + Double(template.height) / 2.0) / Double(frame.height)
+            let match = RemoteImageMatch(
+                point: AutomationPoint(x: centerX, y: centerY),
+                score: bestScore,
+                scaleMultiplier: candidate.scaleMultiplier
+            )
+            if bestMatch == nil || match.score > bestMatch!.score {
+                bestMatch = match
             }
         }
 
-        guard bestScore > -Double.greatestFiniteMagnitude else {
-            return nil
+        return bestMatch
+    }
+
+    private func templateCandidates(
+        templateImage: CGImage,
+        baseScale: Double,
+        frameWidth: Int,
+        frameHeight: Int
+    ) -> [(width: Int, height: Int, scaleMultiplier: Double)] {
+        let scaleMultipliers: [Double] = [0.8, 0.9, 1.0, 1.1, 1.2]
+        var candidates: [(width: Int, height: Int, scaleMultiplier: Double)] = []
+        var seenSizes = Set<String>()
+
+        for scaleMultiplier in scaleMultipliers {
+            let candidateScale = baseScale * scaleMultiplier
+            let width = max(4, Int(Double(templateImage.width) * candidateScale))
+            let height = max(4, Int(Double(templateImage.height) * candidateScale))
+            guard width <= frameWidth, height <= frameHeight else {
+                continue
+            }
+
+            let sizeKey = "\(width)x\(height)"
+            guard !seenSizes.contains(sizeKey) else {
+                continue
+            }
+
+            seenSizes.insert(sizeKey)
+            candidates.append((width: width, height: height, scaleMultiplier: scaleMultiplier))
         }
 
-        let centerX = (Double(bestX) + Double(template.width) / 2.0) / Double(frame.width)
-        let centerY = (Double(bestY) + Double(template.height) / 2.0) / Double(frame.height)
-        return RemoteImageMatch(
-            point: AutomationPoint(x: centerX, y: centerY),
-            score: bestScore
-        )
+        return candidates
+    }
+
+    private func imageScanStep(for template: RemoteGrayscaleImage) -> Int {
+        let minDimension = min(template.width, template.height)
+        if minDimension <= 12 {
+            return 1
+        }
+        if minDimension <= 24 {
+            return 2
+        }
+        return 3
     }
 
     private func templateImage(for step: AutomationStep) throws -> CGImage? {

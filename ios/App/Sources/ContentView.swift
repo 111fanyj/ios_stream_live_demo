@@ -13,6 +13,10 @@ struct ContentView: View {
     @State private var isTestingConnection = false
     @State private var localNetworkPermissionResult = "未请求"
     @State private var isRequestingLocalNetworkPermission = false
+    @State private var replayFrameOCRQuery = ""
+    @State private var replayFrameOCRStatus = "尚未识别"
+    @State private var replayFrameOCRResult: ReplayFrameOCRResult?
+    @State private var isRunningReplayFrameOCR = false
     private let diagnosticsDateFormatter = ISO8601DateFormatter()
 
     var body: some View {
@@ -246,6 +250,78 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
 
                     VStack(alignment: .leading, spacing: 12) {
+                        Text("最新画面 OCR 调试")
+                            .font(.headline)
+
+                        Text("输入要查找的文字后点击识别。主 App 会读取 Broadcast Extension 最近写入 App Group 的 replay 画面截图，本地执行 OCR，并把命中的位置框出来。留空则直接展示当前截图里的全部 OCR 结果。")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+
+                        TextField("例如 企业微信；留空则展示全部 OCR", text: $replayFrameOCRQuery)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textFieldStyle(.roundedBorder)
+
+                        HStack {
+                            Button(isRunningReplayFrameOCR ? "正在识别最新画面..." : "识别最新画面") {
+                                runReplayFrameOCR()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isRunningReplayFrameOCR)
+
+                            Button("清空结果") {
+                                replayFrameOCRResult = nil
+                                replayFrameOCRStatus = "尚未识别"
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Text("最新截图时间: \(latestReplayFrameSummaryText)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Text("识别状态: \(replayFrameOCRStatus)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        if let result = replayFrameOCRResult {
+                            Text("截图尺寸: \(Int(result.imageSize.width)) x \(Int(result.imageSize.height))")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
+                            Image(uiImage: result.annotatedImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: .infinity)
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                                }
+
+                            if !result.matches.isEmpty {
+                                Text("命中文字")
+                                    .font(.subheadline)
+                                ForEach(result.matches.prefix(12)) { candidate in
+                                    Text("\(candidate.text) / 置信度 \(formatConfidence(candidate.confidence))")
+                                        .font(.caption)
+                                        .textSelection(.enabled)
+                                }
+                            }
+
+                            if !result.candidates.isEmpty {
+                                Text(result.matches.isEmpty ? "OCR 识别到的文字" : "完整 OCR 结果")
+                                    .font(.subheadline)
+                                ForEach(result.candidates.prefix(20)) { candidate in
+                                    Text("\(candidate.text) / 置信度 \(formatConfidence(candidate.confidence))")
+                                        .font(.caption)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
                         Text("启动直播")
                             .font(.headline)
                         Text("优先用下面这个系统广播按钮测试。它会直接指定当前 App 对应的 Broadcast Extension。")
@@ -345,8 +421,55 @@ struct ContentView: View {
         return "广播扩展已经收到视频数据，并且正在通过 WebRTC 视频轨道向查看端发送画面。"
     }
 
+    private var latestReplayFrameSummaryText: String {
+        guard let imageURL = StreamDefaults.latestReplayFrameURL(), FileManager.default.fileExists(atPath: imageURL.path) else {
+            return "暂无可用截图"
+        }
+
+        let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier)
+        let timestamp = defaults?.string(forKey: StreamDefaults.latestReplayFrameUpdatedAtKey) ?? ""
+        return timestamp.isEmpty ? "文件已存在，但还没有时间戳" : timestamp
+    }
+
     private func refreshDiagnostics() {
         diagnostics = StreamDiagnostics.load()
+    }
+
+    private func runReplayFrameOCR() {
+        let query = replayFrameOCRQuery
+        isRunningReplayFrameOCR = true
+        replayFrameOCRStatus = "正在读取最新截图并执行 OCR..."
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let result = try ReplayFrameOCRInspector.inspectLatestFrame(query: query)
+                let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                let status: String
+                if trimmedQuery.isEmpty {
+                    status = "OCR 完成，共识别 \(result.candidates.count) 条文本"
+                } else if result.matches.isEmpty {
+                    status = "没有命中“\(trimmedQuery)”，OCR 共识别 \(result.candidates.count) 条文本"
+                } else {
+                    status = "命中“\(trimmedQuery)”共 \(result.matches.count) 条"
+                }
+
+                DispatchQueue.main.async {
+                    replayFrameOCRResult = result
+                    replayFrameOCRStatus = status
+                    isRunningReplayFrameOCR = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    replayFrameOCRResult = nil
+                    replayFrameOCRStatus = error.localizedDescription
+                    isRunningReplayFrameOCR = false
+                }
+            }
+        }
+    }
+
+    private func formatConfidence(_ confidence: Float) -> String {
+        String(format: "%.3f", confidence)
     }
 
     private func testServerConnection() async {

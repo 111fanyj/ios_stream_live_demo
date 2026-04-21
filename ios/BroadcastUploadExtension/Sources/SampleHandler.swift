@@ -1,3 +1,4 @@
+import CoreImage
 import CoreMedia
 import Foundation
 import OSLog
@@ -68,6 +69,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private let minimumSendInterval: TimeInterval = 1.0 / 12.0
     private let isoFormatter = ISO8601DateFormatter()
     private let automationCommandQueue = DispatchQueue(label: "IOSStreamViewer.BroadcastUploadExtension.RemoteAutomation")
+    private let replayFrameSnapshotContext = CIContext(options: [.cacheIntermediates: false])
     private lazy var peerConnectionFactory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
         return RTCPeerConnectionFactory(
@@ -84,6 +86,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private var remoteAutomationInspector = RemoteAutomationInspector()
     private var activeAutomationSessionID: String?
     private var pendingAutomationCheckCommand: PendingAutomationCheckCommand?
+    private var latestVideoPixelBuffer: CVPixelBuffer?
+    private var lastReplayFrameSnapshotAt = Date.distantPast
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         resetDiagnosticsSession()
@@ -104,6 +108,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         automationCommandQueue.sync {
             activeAutomationSessionID = nil
             pendingAutomationCheckCommand = nil
+            latestVideoPixelBuffer = nil
             remoteAutomationInspector.stop()
         }
         updateAutomationStatus("远程执行模式待命")
@@ -150,6 +155,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         automationCommandQueue.sync {
             activeAutomationSessionID = nil
             pendingAutomationCheckCommand = nil
+            latestVideoPixelBuffer = nil
             remoteAutomationInspector.stop()
         }
         resetPeerConnections()
@@ -172,7 +178,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
+        automationCommandQueue.sync {
+            latestVideoPixelBuffer = pixelBuffer
+        }
         processPendingAutomationCheckIfNeeded(pixelBuffer: pixelBuffer)
+        persistLatestReplayFrameIfNeeded(pixelBuffer: pixelBuffer, at: now)
 
         guard !viewerPeers.isEmpty else {
             if now.timeIntervalSince(lastNoViewerLogAt) >= 5 {
@@ -724,6 +734,13 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
             updateAutomationStatus("等待视频帧执行检查: \(step.id)")
             logEvent("收到 checkNextItem: \(step.id)")
+
+            if let latestPixelBuffer = automationCommandQueue.sync(execute: { latestVideoPixelBuffer }) {
+                logEvent("使用最近一帧立即执行检查: \(step.id)")
+                processPendingAutomationCheckIfNeeded(pixelBuffer: latestPixelBuffer)
+            } else {
+                logEvent("当前没有可用视频帧，等待下一帧执行检查: \(step.id)")
+            }
         default:
             sendAutomationResult(
                 sessionID: sessionID,
@@ -787,6 +804,38 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             payload: result.payload,
             error: result.error
         )
+    }
+
+    private func persistLatestReplayFrameIfNeeded(pixelBuffer: CVPixelBuffer, at now: Date) {
+        guard now.timeIntervalSince(lastReplayFrameSnapshotAt) >= 1 else {
+            return
+        }
+
+        guard let snapshotURL = StreamDefaults.latestReplayFrameURL() else {
+            return
+        }
+
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        do {
+            guard let data = try replayFrameSnapshotContext.jpegRepresentation(
+                of: image,
+                colorSpace: CGColorSpaceCreateDeviceRGB(),
+                options: [:]
+            ) else {
+                return
+            }
+            try FileManager.default.createDirectory(
+                at: snapshotURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            try data.write(to: snapshotURL, options: Data.WritingOptions.atomic)
+            lastReplayFrameSnapshotAt = now
+            let defaults = UserDefaults(suiteName: StreamDefaults.appGroupIdentifier)
+            defaults?.set(isoFormatter.string(from: now), forKey: StreamDefaults.latestReplayFrameUpdatedAtKey)
+        } catch {
+            logger.error("Failed to persist latest replay frame: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func startWebSocketPingLoop(for task: URLSessionWebSocketTask) {

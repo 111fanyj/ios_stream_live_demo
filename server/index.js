@@ -321,6 +321,9 @@ function buildAutomationStatusPayload(session, status, message, extra = {}) {
 
 function broadcastAutomationStatus(session, status, message, extra = {}) {
   const payload = buildAutomationStatusPayload(session, status, message, extra);
+  const bestImageMatch = extra?.detail?.payload?.bestImageMatch || extra?.detail?.bestImageMatch || null;
+  const bestImageScore = Number(bestImageMatch?.score);
+  const bestImageScaleMultiplier = Number(bestImageMatch?.scaleMultiplier);
   broadcastAutomationPayload(session.roomId, payload);
   log('automation_status', {
     roomId: session.roomId,
@@ -329,7 +332,9 @@ function broadcastAutomationStatus(session, status, message, extra = {}) {
     message,
     stepId: extra.stepId ?? null,
     currentStepIndex: session.currentStepIndex,
-    stepCount: session.document.steps.length
+    stepCount: session.document.steps.length,
+    bestImageScore: Number.isFinite(bestImageScore) ? bestImageScore : undefined,
+    bestImageScaleMultiplier: Number.isFinite(bestImageScaleMultiplier) ? bestImageScaleMultiplier : undefined
   });
 }
 
@@ -806,6 +811,7 @@ function selectImageMatch(step, payload) {
 
   const point = normalizePoint(match.point);
   const score = Number(match.score);
+  const scaleMultiplier = Number(match.scaleMultiplier);
   if (!point || !Number.isFinite(score)) {
     return null;
   }
@@ -819,7 +825,11 @@ function selectImageMatch(step, payload) {
     return null;
   }
 
-  return { point, score };
+  return {
+    point,
+    score,
+    scaleMultiplier: Number.isFinite(scaleMultiplier) ? scaleMultiplier : null
+  };
 }
 
 function handleCheckNextItemResult(session, payload, responseStepId) {
@@ -865,12 +875,18 @@ function handleCheckNextItemResult(session, payload, responseStepId) {
   const timeoutMs = Number(step.timeoutMs) || 10_000;
   const pollIntervalMs = Number(step.pollIntervalMs) || 500;
   const elapsedMs = Date.now() - waitState.startedAt;
+  const threshold = step.type === 'waitForImage'
+    ? Number(step.threshold ?? 0.84)
+    : undefined;
   if (elapsedMs >= timeoutMs) {
     finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 等待超时`, {
       stepId: step.id,
       detail: {
+        attempts: waitState.attempts,
         elapsedMs,
-        timeoutMs
+        timeoutMs,
+        threshold,
+        payload
       }
     });
     return;
@@ -881,6 +897,7 @@ function handleCheckNextItemResult(session, payload, responseStepId) {
     detail: {
       attempts: waitState.attempts,
       elapsedMs,
+      threshold,
       payload
     }
   });
@@ -999,7 +1016,7 @@ function executeAutomationStep(session) {
   });
   dispatchPublisherCommand(session, 'checkNextItem', payload, {
     stepId: step.id,
-    timeoutMs: Math.max(5_000, Number(step.pollIntervalMs) || 5000)
+    timeoutMs: Math.max(15_000, timeoutMs + 2_000)
   });
 }
 

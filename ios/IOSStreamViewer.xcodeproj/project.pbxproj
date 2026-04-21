@@ -11,6 +11,7 @@
 		3B1517B80DA961622038AD31 /* AutomationPackageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56C76F260E75C10DEA63E028 /* AutomationPackageManager.swift */; };
 		3DFDC846B2E9EDAEB2AB04A4 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = D5B6CBEFDDA52B38EF3CD774 /* ZIPFoundation */; };
 		50CB7B8E91C226117048D9C1 /* RemoteAutomationInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2579D43805104CC42825582A /* RemoteAutomationInspector.swift */; };
+		79974636CC1705B4BA92A649 /* ReplayFrameOCRInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB204558EAFD38868533894F /* ReplayFrameOCRInspector.swift */; };
 		9E1BBBBC34D217321B7BC43F /* SignalProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E972055CF287A145732014E /* SignalProbe.swift */; };
 		9F3915965C052A8545D87DC2 /* AutomationRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61D3C296736ECFDAE0A662E2 /* AutomationRunner.swift */; };
 		A053E7419E213615E45D1FA7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3510887441D2C1A692423B76 /* ContentView.swift */; };
@@ -71,6 +72,7 @@
 		8B23B99ED4466182E7A740E5 /* SharedStreamConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedStreamConfiguration.swift; sourceTree = "<group>"; };
 		AB7EF0D6DBA090C38B62F6A4 /* WebRTC.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = WebRTC.xcframework; path = Vendor/WebRTC.xcframework; sourceTree = "<group>"; };
 		CC06E2357A43F9C902D3C27A /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		EB204558EAFD38868533894F /* ReplayFrameOCRInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayFrameOCRInspector.swift; sourceTree = "<group>"; };
 		F8342D7852CD915F4660913F /* IOSStreamViewerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSStreamViewerApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -121,6 +123,7 @@
 				4AF067BC4FC27BC25474BF30 /* BroadcastPickerButton.swift */,
 				3510887441D2C1A692423B76 /* ContentView.swift */,
 				F8342D7852CD915F4660913F /* IOSStreamViewerApp.swift */,
+				EB204558EAFD38868533894F /* ReplayFrameOCRInspector.swift */,
 				2E972055CF287A145732014E /* SignalProbe.swift */,
 				265BD8A8443062E9F2EFA04E /* StreamConfiguration.swift */,
 			);
@@ -239,6 +242,7 @@
 				BEA8213A82FE2F2FB91FA9BD /* BroadcastPickerButton.swift in Sources */,
 				A053E7419E213615E45D1FA7 /* ContentView.swift in Sources */,
 				E0F5C0EC9E7E41AC11B3AE8D /* IOSStreamViewerApp.swift in Sources */,
+				79974636CC1705B4BA92A649 /* ReplayFrameOCRInspector.swift in Sources */,
 				9E1BBBBC34D217321B7BC43F /* SignalProbe.swift in Sources */,
 				DCCCE74B8CC66A7A8280C454 /* StreamConfiguration.swift in Sources */,
 			);
