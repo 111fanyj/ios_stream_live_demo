@@ -17,6 +17,13 @@ private struct RemoteImageMatch {
     let scaleMultiplier: Double
 }
 
+private struct RemoteRecognizedText {
+    let text: String
+    let confidence: Float
+    let point: AutomationPoint
+    let bounds: [String: Double]
+}
+
 final class RemoteAutomationInspector {
     enum InspectorError: LocalizedError {
         case sessionInactive
@@ -87,7 +94,49 @@ final class RemoteAutomationInspector {
         }
     }
 
+    func makeDebugOCRPayload(pixelBuffer: CVPixelBuffer, query: String?) -> [String: Any] {
+        let normalizedQuery = (query ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let recognizedTexts = collectRecognizedTexts(pixelBuffer: pixelBuffer)
+        let candidates = recognizedTexts.map { text in
+            let matched = normalizedQuery.isEmpty ? true : matchesText(text.text, query: normalizedQuery)
+            return [
+                "text": text.text,
+                "confidence": text.confidence,
+                "point": [
+                    "x": text.point.x,
+                    "y": text.point.y
+                ],
+                "bounds": text.bounds,
+                "matched": matched
+            ] as [String : Any]
+        }
+        let matchedCandidates = candidates.filter { ($0["matched"] as? Bool) == true }
+
+        return [
+            "query": normalizedQuery,
+            "ocrCandidates": candidates,
+            "matchedCandidates": matchedCandidates,
+            "matchedCount": matchedCandidates.count
+        ]
+    }
+
     private func collectTextCandidates(pixelBuffer: CVPixelBuffer) -> [[String: Any]] {
+        var candidates: [[String: Any]] = []
+        for text in collectRecognizedTexts(pixelBuffer: pixelBuffer) {
+            candidates.append([
+                "text": text.text,
+                "confidence": text.confidence,
+                "point": [
+                    "x": text.point.x,
+                    "y": text.point.y
+                ]
+            ])
+        }
+
+        return candidates
+    }
+
+    private func collectRecognizedTexts(pixelBuffer: CVPixelBuffer) -> [RemoteRecognizedText] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .fast
         request.usesLanguageCorrection = false
@@ -100,25 +149,43 @@ final class RemoteAutomationInspector {
             return []
         }
 
-        var candidates: [[String: Any]] = []
+        var results: [RemoteRecognizedText] = []
         for observation in request.results ?? [] {
+            let bounds = normalizedBounds(from: observation.boundingBox)
             let point = AutomationPoint(
                 x: observation.boundingBox.midX,
                 y: 1.0 - observation.boundingBox.midY
             )
             for candidate in observation.topCandidates(3) {
-                candidates.append([
-                    "text": candidate.string,
-                    "confidence": candidate.confidence,
-                    "point": [
-                        "x": point.x,
-                        "y": point.y
-                    ]
-                ])
+                results.append(RemoteRecognizedText(
+                    text: candidate.string,
+                    confidence: candidate.confidence,
+                    point: point,
+                    bounds: bounds
+                ))
             }
         }
 
-        return candidates
+        return results
+    }
+
+    private func normalizedBounds(from rect: CGRect) -> [String: Double] {
+        [
+            "x": rect.minX,
+            "y": 1.0 - rect.maxY,
+            "width": rect.width,
+            "height": rect.height
+        ]
+    }
+
+    private func matchesText(_ text: String, query: String) -> Bool {
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedText.isEmpty, !normalizedQuery.isEmpty else {
+            return false
+        }
+
+        return normalizedText.contains(normalizedQuery)
     }
 
     private func findBestImageMatch(step: AutomationStep, pixelBuffer: CVPixelBuffer) throws -> RemoteImageMatch? {

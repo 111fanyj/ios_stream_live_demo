@@ -635,6 +635,126 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         }
     }
 
+    private func sendDebugFrameResult(
+        requestID: String,
+        status: String,
+        payload: [String: Any]? = nil,
+        error: String? = nil
+    ) {
+        guard let task = webSocketTask else {
+            logEvent("调试帧结果发送前置条件不满足")
+            return
+        }
+
+        var message: [String: Any] = [
+            "type": "debug_frame_result",
+            "requestId": requestID,
+            "status": status
+        ]
+        if let payload {
+            message["payload"] = payload
+        }
+        if let error {
+            message["error"] = error
+        }
+
+        guard let json = makeJSONString(from: message) else {
+            logEvent("调试帧结果序列化失败")
+            return
+        }
+
+        task.send(.string(json)) { [weak self] sendError in
+            if let sendError {
+                self?.logEvent("调试帧结果发送失败: \(sendError.localizedDescription)")
+                return
+            }
+
+            self?.logEvent("已发送调试帧结果: \(requestID) / \(status)")
+        }
+    }
+
+    private func handleDebugFrameRequestMessage(_ json: [String: Any]) {
+        guard let requestID = json["requestId"] as? String, !requestID.isEmpty else {
+            return
+        }
+
+        let query = (json["query"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let pixelBuffer = automationCommandQueue.sync(execute: { latestVideoPixelBuffer }) else {
+            logEvent("调试帧请求失败: 当前没有可用视频帧")
+            sendDebugFrameResult(
+                requestID: requestID,
+                status: "error",
+                error: "当前还没有可用的 ReplayKit 视频帧"
+            )
+            return
+        }
+
+        var payload = remoteAutomationInspector.makeDebugOCRPayload(pixelBuffer: pixelBuffer, query: query)
+        guard let imagePayload = makeDebugFrameImagePayload(pixelBuffer: pixelBuffer) else {
+            logEvent("调试帧请求失败: 图片编码失败")
+            sendDebugFrameResult(
+                requestID: requestID,
+                status: "error",
+                error: "内存帧转图片失败"
+            )
+            return
+        }
+
+        for (key, value) in imagePayload {
+            payload[key] = value
+        }
+        payload["capturedAt"] = isoFormatter.string(from: Date())
+
+        logEvent("收到调试帧请求: \(requestID) query=\(query.isEmpty ? "<empty>" : query)")
+        sendDebugFrameResult(requestID: requestID, status: "ok", payload: payload)
+    }
+
+    private func makeDebugFrameImagePayload(pixelBuffer: CVPixelBuffer) -> [String: Any]? {
+        let sourceWidth = max(1, CVPixelBufferGetWidth(pixelBuffer))
+        let sourceHeight = max(1, CVPixelBufferGetHeight(pixelBuffer))
+        let sourceLongEdge = max(sourceWidth, sourceHeight)
+        let scale = min(1.0, Double(targetMaxLongEdge) / Double(sourceLongEdge))
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        let outputImage: CIImage
+        let outputWidth: Int
+        let outputHeight: Int
+
+        if scale < 0.999 {
+            outputImage = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            outputWidth = max(1, Int((Double(sourceWidth) * scale).rounded()))
+            outputHeight = max(1, Int((Double(sourceHeight) * scale).rounded()))
+        } else {
+            outputImage = image
+            outputWidth = sourceWidth
+            outputHeight = sourceHeight
+        }
+
+        do {
+            guard let data = try replayFrameSnapshotContext.jpegRepresentation(
+                of: outputImage,
+                colorSpace: CGColorSpaceCreateDeviceRGB(),
+                options: [:]
+            ) else {
+                return nil
+            }
+
+            return [
+                "imageDataURL": "data:image/jpeg;base64,\(data.base64EncodedString())",
+                "imageSize": [
+                    "width": outputWidth,
+                    "height": outputHeight
+                ],
+                "sourceFrameSize": [
+                    "width": sourceWidth,
+                    "height": sourceHeight
+                ]
+            ]
+        } catch {
+            logger.error("Failed to encode debug frame image: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     private func decodeAutomationStep(from value: Any) throws -> AutomationStep {
         let data = try JSONSerialization.data(withJSONObject: value, options: [])
         return try JSONDecoder().decode(AutomationStep.self, from: data)
@@ -1128,6 +1248,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         case "automation_command":
             logEvent("收到远程自动化命令: \((json["method"] as? String) ?? "unknown")")
             handleAutomationCommandMessage(json)
+        case "debug_frame_request":
+            handleDebugFrameRequestMessage(json)
         case "error":
             let errorMessage = json["message"] as? String ?? "未知错误"
             updateDiagnostics(status: "服务端返回错误", error: errorMessage)

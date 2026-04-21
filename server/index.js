@@ -13,6 +13,7 @@ const port = Number(process.env.PORT || 3000);
 const automationRoot = path.join(__dirname, 'data', 'automation');
 const rooms = new Map();
 const automationSessions = new Map();
+const debugFrameRequests = new Map();
 let nextClientId = 1;
 let nextAutomationSequence = 1;
 
@@ -79,6 +80,81 @@ function getProbeIds(room) {
 
 function getExecutorId(room) {
   return room.executor?.clientId ?? null;
+}
+
+function getDebugRequesterById(room, clientId) {
+  if (!clientId) {
+    return null;
+  }
+
+  return room.viewers.get(clientId) ?? room.probes.get(clientId) ?? null;
+}
+
+function rememberDebugFrameRequest(roomId, requestId, requesterClientId) {
+  let roomRequests = debugFrameRequests.get(roomId);
+  if (!roomRequests) {
+    roomRequests = new Map();
+    debugFrameRequests.set(roomId, roomRequests);
+  }
+
+  roomRequests.set(requestId, {
+    requesterClientId,
+    createdAt: new Date().toISOString()
+  });
+}
+
+function takeDebugFrameRequest(roomId, requestId) {
+  const roomRequests = debugFrameRequests.get(roomId);
+  if (!roomRequests) {
+    return null;
+  }
+
+  const request = roomRequests.get(requestId) ?? null;
+  if (request) {
+    roomRequests.delete(requestId);
+    if (roomRequests.size === 0) {
+      debugFrameRequests.delete(roomId);
+    }
+  }
+
+  return request;
+}
+
+function clearDebugFrameRequestsForClient(roomId, clientId) {
+  const roomRequests = debugFrameRequests.get(roomId);
+  if (!roomRequests) {
+    return;
+  }
+
+  for (const [requestId, request] of roomRequests.entries()) {
+    if (request.requesterClientId === clientId) {
+      roomRequests.delete(requestId);
+    }
+  }
+
+  if (roomRequests.size === 0) {
+    debugFrameRequests.delete(roomId);
+  }
+}
+
+function failPendingDebugFrameRequests(roomId, reason) {
+  const roomRequests = debugFrameRequests.get(roomId);
+  if (!roomRequests || roomRequests.size === 0) {
+    return;
+  }
+
+  const room = getRoom(roomId);
+  for (const [requestId, request] of roomRequests.entries()) {
+    const requester = getDebugRequesterById(room, request.requesterClientId);
+    safeSend(requester, {
+      type: 'debug_frame_result',
+      requestId,
+      status: 'error',
+      error: reason
+    });
+  }
+
+  debugFrameRequests.delete(roomId);
 }
 
 function getClientById(room, clientId) {
@@ -264,6 +340,49 @@ function getAutomationSession(roomId, sessionId) {
   }
 
   return session;
+}
+
+function handleDebugFrameResult(roomId, message) {
+  const requestId = typeof message.requestId === 'string' ? message.requestId : '';
+  if (!requestId) {
+    log('debug_frame_result_rejected', {
+      roomId,
+      reason: 'missing_request_id'
+    });
+    return;
+  }
+
+  const request = takeDebugFrameRequest(roomId, requestId);
+  if (!request) {
+    log('debug_frame_result_ignored', {
+      roomId,
+      requestId,
+      reason: 'request_not_found'
+    });
+    return;
+  }
+
+  const room = getRoom(roomId);
+  const requester = getDebugRequesterById(room, request.requesterClientId);
+  if (!isClientOpen(requester)) {
+    log('debug_frame_result_dropped', {
+      roomId,
+      requestId,
+      requesterClientId: request.requesterClientId,
+      reason: 'requester_not_open'
+    });
+    return;
+  }
+
+  safeSend(requester, {
+    type: 'debug_frame_result',
+    requestId,
+    status: message.status === 'error' ? 'error' : 'ok',
+    payload: message.payload ?? null,
+    error: message.error ?? null,
+    sourceId: room.publisher?.clientId ?? null,
+    respondedAt: new Date().toISOString()
+  });
 }
 
 function clearAutomationTimer(session) {
@@ -1507,6 +1626,67 @@ wss.on('connection', (ws, req) => {
       return;
     }
 
+    if (message.type === 'debug_frame_result') {
+      if (ws.clientType !== 'publisher') {
+        log('debug_frame_result_rejected', {
+          roomId: ws.roomId,
+          clientId: ws.clientId,
+          clientType: ws.clientType,
+          reason: 'publisher_only'
+        });
+        safeSend(ws, { type: 'error', message: 'Only publisher clients can send debug frame results' });
+        return;
+      }
+
+      handleDebugFrameResult(ws.roomId, message);
+      return;
+    }
+
+    if (message.type === 'debug_frame_request') {
+      if (!['viewer', 'probe'].includes(ws.clientType)) {
+        log('debug_frame_request_rejected', {
+          roomId: ws.roomId,
+          clientId: ws.clientId,
+          clientType: ws.clientType,
+          reason: 'viewer_or_probe_only'
+        });
+        safeSend(ws, { type: 'error', message: 'Only viewer or probe clients can request debug frames' });
+        return;
+      }
+
+      const requestId = typeof message.requestId === 'string' && message.requestId
+        ? message.requestId
+        : makeAutomationId('debug-frame');
+      const query = typeof message.query === 'string' ? message.query.trim() : '';
+
+      rememberDebugFrameRequest(ws.roomId, requestId, ws.clientId);
+      const forwarded = sendToPublisher(ws.roomId, {
+        type: 'debug_frame_request',
+        requestId,
+        query,
+        requesterClientId: ws.clientId
+      });
+
+      if (!forwarded) {
+        takeDebugFrameRequest(ws.roomId, requestId);
+        safeSend(ws, {
+          type: 'debug_frame_result',
+          requestId,
+          status: 'error',
+          error: 'Publisher 未连接，无法获取内存帧'
+        });
+        return;
+      }
+
+      safeSend(ws, {
+        type: 'debug_frame_queued',
+        requestId,
+        query,
+        status: 'pending'
+      });
+      return;
+    }
+
     if (message.type === 'automation_start') {
       if (ws.clientType !== 'viewer') {
         safeSend(ws, { type: 'warning', message: 'Only viewer clients can start automation' });
@@ -1674,6 +1854,7 @@ wss.on('connection', (ws, req) => {
     if (ws.clientType === 'publisher' && currentRoom.publisher === ws) {
       currentRoom.publisher = null;
       currentRoom.publisherConnectedAt = null;
+      failPendingDebugFrameRequests(ws.roomId, 'Publisher 已断开，无法返回内存帧');
 
       if (automationSessions.has(ws.roomId)) {
         finalizeAutomationSession(ws.roomId, 'error', 'Publisher 已断开', {
@@ -1691,6 +1872,7 @@ wss.on('connection', (ws, req) => {
 
     if (ws.clientType === 'viewer') {
       currentRoom.viewers.delete(ws.clientId);
+      clearDebugFrameRequestsForClient(ws.roomId, ws.clientId);
 
       const session = automationSessions.get(ws.roomId);
       if (session && session.ownerViewerId === ws.clientId) {
@@ -1709,6 +1891,7 @@ wss.on('connection', (ws, req) => {
 
     if (ws.clientType === 'probe') {
       currentRoom.probes.delete(ws.clientId);
+      clearDebugFrameRequestsForClient(ws.roomId, ws.clientId);
     }
 
     if (ws.clientType === 'executor' && currentRoom.executor === ws) {
@@ -1721,6 +1904,7 @@ wss.on('connection', (ws, req) => {
     }
 
     if (!currentRoom.publisher && !currentRoom.executor && currentRoom.viewers.size === 0 && currentRoom.probes.size === 0) {
+      debugFrameRequests.delete(ws.roomId);
       log('room_removed', { roomId: ws.roomId });
       rooms.delete(ws.roomId);
       return;

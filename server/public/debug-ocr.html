@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>内存帧 OCR 调试台</title>
+    <style>
+      :root {
+        --bg: #f3efe6;
+        --paper: rgba(255, 252, 246, 0.92);
+        --ink: #1f2933;
+        --muted: #5b6773;
+        --line: rgba(74, 85, 104, 0.18);
+        --accent: #bf5b36;
+        --accent-soft: #f5d5c8;
+        --ok: #2f7d4a;
+        --warn: #b7791f;
+        --danger: #ba3b46;
+        --shadow: 0 20px 50px rgba(31, 41, 51, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(191, 91, 54, 0.18), transparent 30%),
+          radial-gradient(circle at right 20%, rgba(47, 125, 74, 0.14), transparent 26%),
+          linear-gradient(180deg, #f8f4ec 0%, #ece5d8 100%);
+      }
+
+      main {
+        width: min(1380px, calc(100% - 28px));
+        margin: 0 auto;
+        padding: 22px 0 40px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(280px, 420px) 1fr;
+        gap: 18px;
+        align-items: start;
+      }
+
+      .card {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(14px);
+      }
+
+      .controls {
+        padding: 20px;
+        display: grid;
+        gap: 14px;
+        position: sticky;
+        top: 18px;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(30px, 4vw, 44px);
+        line-height: 1.05;
+        letter-spacing: -0.03em;
+      }
+
+      .lede {
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .grid {
+        display: grid;
+        gap: 10px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      input,
+      button {
+        font: inherit;
+      }
+
+      input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.82);
+        color: var(--ink);
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 11px 18px;
+        cursor: pointer;
+        transition: transform 120ms ease, opacity 120ms ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+        transform: none;
+      }
+
+      .primary {
+        background: linear-gradient(135deg, #c05c36, #a33f20);
+        color: #fff8f2;
+      }
+
+      .secondary {
+        background: rgba(255, 255, 255, 0.88);
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+
+      .status-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill {
+        padding: 7px 11px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.72);
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .pill.ok {
+        color: var(--ok);
+        border-color: rgba(47, 125, 74, 0.22);
+      }
+
+      .pill.warn {
+        color: var(--warn);
+      }
+
+      .pill.danger {
+        color: var(--danger);
+      }
+
+      .console {
+        min-height: 110px;
+        max-height: 220px;
+        overflow: auto;
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(35, 28, 22, 0.9);
+        color: #f7efe2;
+        font-family: "SFMono-Regular", Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+
+      .result {
+        padding: 18px;
+        display: grid;
+        gap: 16px;
+      }
+
+      .frame-shell {
+        position: relative;
+        overflow: hidden;
+        border-radius: 22px;
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(135deg, rgba(191, 91, 54, 0.08), rgba(47, 125, 74, 0.08)),
+          #fcfaf5;
+        min-height: 320px;
+        display: grid;
+        place-items: center;
+      }
+
+      .frame-empty {
+        color: var(--muted);
+        text-align: center;
+        padding: 28px;
+        line-height: 1.7;
+      }
+
+      .frame-image {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .frame-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .ocr-box {
+        position: absolute;
+        border: 2px solid rgba(186, 59, 70, 0.95);
+        background: rgba(186, 59, 70, 0.14);
+        border-radius: 8px;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3) inset;
+      }
+
+      .ocr-box.matched {
+        border-color: rgba(47, 125, 74, 0.96);
+        background: rgba(47, 125, 74, 0.18);
+      }
+
+      .ocr-label {
+        position: absolute;
+        left: 0;
+        top: -24px;
+        max-width: 240px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: rgba(31, 41, 51, 0.86);
+        color: #fff;
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .stat {
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.74);
+      }
+
+      .stat small {
+        display: block;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      .stat strong {
+        font-size: 18px;
+      }
+
+      .tables {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 14px;
+      }
+
+      .table-card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.76);
+      }
+
+      .table-card h2 {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        font-size: 18px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(74, 85, 104, 0.12);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        font-size: 12px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      td {
+        font-size: 13px;
+      }
+
+      .mono {
+        font-family: "SFMono-Regular", Menlo, monospace;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      @media (max-width: 1080px) {
+        .hero,
+        .tables,
+        .stats {
+          grid-template-columns: 1fr;
+        }
+
+        .controls {
+          position: static;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <section class="card controls">
+          <div class="grid">
+            <h1>内存帧 OCR 调试台</h1>
+            <p class="lede">这个页面直接向 iOS Broadcast Extension 请求最近一帧内存画面。iOS 会返回同一帧的 JPEG 预览和 OCR 结果，用来验证实时内存路径是否正常。</p>
+          </div>
+
+          <label>
+            服务端 WebSocket
+            <input id="serverUrlInput" placeholder="ws://127.0.0.1:3000" />
+          </label>
+
+          <label>
+            房间 ID
+            <input id="roomIdInput" placeholder="default" />
+          </label>
+
+          <label>
+            OCR 查询词
+            <input id="queryInput" placeholder="可选，例如 领取奖励" />
+          </label>
+
+          <div class="actions">
+            <button id="connectButton" class="secondary" type="button">连接调试通道</button>
+            <button id="requestButton" class="primary" type="button" disabled>发送内存帧请求</button>
+          </div>
+
+          <div class="status-strip">
+            <span id="socketStatus" class="pill warn">未连接</span>
+            <span id="publisherStatus" class="pill warn">Publisher 未知</span>
+            <span id="requestStatus" class="pill">等待请求</span>
+          </div>
+
+          <div id="console" class="console"></div>
+        </section>
+
+        <section class="card result">
+          <div id="stats" class="stats">
+            <div class="stat"><small>请求 ID</small><strong id="requestIdValue">-</strong></div>
+            <div class="stat"><small>返回时间</small><strong id="respondedAtValue">-</strong></div>
+            <div class="stat"><small>识别总数</small><strong id="candidateCountValue">0</strong></div>
+            <div class="stat"><small>命中数量</small><strong id="matchedCountValue">0</strong></div>
+          </div>
+
+          <section id="frameShell" class="frame-shell">
+            <div id="frameEmpty" class="frame-empty">还没有收到 iOS 回传的内存帧。<br />先确保 Broadcast Extension 已连接到同一个 room，然后点击发送。</div>
+            <img id="frameImage" class="frame-image" alt="iOS 内存帧" hidden />
+            <div id="frameOverlay" class="frame-overlay"></div>
+          </section>
+
+          <div class="tables">
+            <section class="table-card">
+              <h2>命中结果</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>文本</th>
+                    <th>置信度</th>
+                    <th>位置</th>
+                  </tr>
+                </thead>
+                <tbody id="matchedBody">
+                  <tr><td colspan="3" class="muted">暂无命中</td></tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section class="table-card">
+              <h2>全部 OCR 候选</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>文本</th>
+                    <th>置信度</th>
+                    <th>位置</th>
+                  </tr>
+                </thead>
+                <tbody id="allBody">
+                  <tr><td colspan="3" class="muted">暂无结果</td></tr>
+                </tbody>
+              </table>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const defaultServerUrl = `${protocol}//${window.location.host}`;
+      const serverUrlInput = document.getElementById('serverUrlInput');
+      const roomIdInput = document.getElementById('roomIdInput');
+      const queryInput = document.getElementById('queryInput');
+      const connectButton = document.getElementById('connectButton');
+      const requestButton = document.getElementById('requestButton');
+      const socketStatus = document.getElementById('socketStatus');
+      const publisherStatus = document.getElementById('publisherStatus');
+      const requestStatus = document.getElementById('requestStatus');
+      const consoleView = document.getElementById('console');
+      const frameEmpty = document.getElementById('frameEmpty');
+      const frameImage = document.getElementById('frameImage');
+      const frameOverlay = document.getElementById('frameOverlay');
+      const requestIdValue = document.getElementById('requestIdValue');
+      const respondedAtValue = document.getElementById('respondedAtValue');
+      const candidateCountValue = document.getElementById('candidateCountValue');
+      const matchedCountValue = document.getElementById('matchedCountValue');
+      const matchedBody = document.getElementById('matchedBody');
+      const allBody = document.getElementById('allBody');
+
+      let socket = null;
+      let lastRequestId = null;
+      let pendingRequestTimer = null;
+
+      serverUrlInput.value = params.get('server') || defaultServerUrl;
+      roomIdInput.value = params.get('roomId') || 'default';
+      queryInput.value = params.get('query') || '';
+
+      function appendLog(line) {
+        const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        consoleView.textContent = `[${timestamp}] ${line}\n${consoleView.textContent}`.trim();
+      }
+
+      function setPill(element, text, tone = '') {
+        element.className = `pill${tone ? ` ${tone}` : ''}`;
+        element.textContent = text;
+      }
+
+      function buildSocketUrl() {
+        const base = serverUrlInput.value.trim() || defaultServerUrl;
+        const url = new URL(base, window.location.href);
+        url.searchParams.set('type', 'probe');
+        url.searchParams.set('roomId', roomIdInput.value.trim() || 'default');
+        return url.toString();
+      }
+
+      function setConnectedState(connected) {
+        requestButton.disabled = !connected;
+        connectButton.textContent = connected ? '断开调试通道' : '连接调试通道';
+        setPill(socketStatus, connected ? '调试通道已连接' : '未连接', connected ? 'ok' : 'warn');
+      }
+
+      function clearPendingRequestTimer() {
+        if (pendingRequestTimer) {
+          window.clearTimeout(pendingRequestTimer);
+          pendingRequestTimer = null;
+        }
+      }
+
+      function failPendingRequest(reason) {
+        clearPendingRequestTimer();
+        if (!lastRequestId) {
+          return;
+        }
+
+        setPill(requestStatus, '请求失败', 'danger');
+        appendLog(`debug_frame_request failed: ${reason}`);
+        lastRequestId = null;
+      }
+
+      function formatBounds(bounds) {
+        if (!bounds) {
+          return '-';
+        }
+        const x = Math.round((bounds.x || 0) * 1000) / 1000;
+        const y = Math.round((bounds.y || 0) * 1000) / 1000;
+        const width = Math.round((bounds.width || 0) * 1000) / 1000;
+        const height = Math.round((bounds.height || 0) * 1000) / 1000;
+        return `${x}, ${y}, ${width}, ${height}`;
+      }
+
+      function escapeHtml(value) {
+        return String(value || '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+
+      function renderRows(container, candidates, emptyText) {
+        if (!Array.isArray(candidates) || candidates.length === 0) {
+          container.innerHTML = `<tr><td colspan="3" class="muted">${escapeHtml(emptyText)}</td></tr>`;
+          return;
+        }
+
+        container.innerHTML = candidates.map((candidate) => {
+          const confidence = Number(candidate.confidence || 0).toFixed(3);
+          return `
+            <tr>
+              <td>${escapeHtml(candidate.text || '')}</td>
+              <td class="mono">${confidence}</td>
+              <td class="mono">${escapeHtml(formatBounds(candidate.bounds))}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      function renderOverlay(candidates) {
+        frameOverlay.innerHTML = '';
+        for (const candidate of candidates || []) {
+          const bounds = candidate.bounds;
+          if (!bounds) {
+            continue;
+          }
+
+          const box = document.createElement('div');
+          box.className = `ocr-box${candidate.matched ? ' matched' : ''}`;
+          box.style.left = `${Math.max(0, bounds.x * 100)}%`;
+          box.style.top = `${Math.max(0, bounds.y * 100)}%`;
+          box.style.width = `${Math.max(0, bounds.width * 100)}%`;
+          box.style.height = `${Math.max(0, bounds.height * 100)}%`;
+
+          const label = document.createElement('div');
+          label.className = 'ocr-label';
+          label.textContent = candidate.text || '';
+          box.appendChild(label);
+          frameOverlay.appendChild(box);
+        }
+      }
+
+      function renderResult(message) {
+        const payload = message.payload || {};
+        const allCandidates = Array.isArray(payload.ocrCandidates) ? payload.ocrCandidates : [];
+        const matchedCandidates = Array.isArray(payload.matchedCandidates) ? payload.matchedCandidates : [];
+        requestIdValue.textContent = message.requestId || '-';
+        respondedAtValue.textContent = message.respondedAt || payload.capturedAt || '-';
+        candidateCountValue.textContent = String(allCandidates.length);
+        matchedCountValue.textContent = String(matchedCandidates.length);
+
+        if (payload.imageDataURL) {
+          frameImage.src = payload.imageDataURL;
+          frameImage.hidden = false;
+          frameEmpty.hidden = true;
+        }
+
+        renderOverlay(allCandidates);
+        renderRows(matchedBody, matchedCandidates, '没有命中当前查询词');
+        renderRows(allBody, allCandidates, '没有 OCR 候选');
+      }
+
+      function handleMessage(event) {
+        const message = JSON.parse(event.data);
+        if (message.type === 'room_state') {
+          setPill(
+            publisherStatus,
+            message.hasPublisher ? `Publisher 在线 · ${message.publisherId || 'unknown'}` : 'Publisher 不在线',
+            message.hasPublisher ? 'ok' : 'warn'
+          );
+          appendLog(`room_state hasPublisher=${Boolean(message.hasPublisher)} viewerCount=${message.viewerCount || 0} probeCount=${message.probeCount || 0}`);
+          return;
+        }
+
+        if (message.type === 'probe_ready') {
+          appendLog(`probe_ready clientId=${message.clientId}`);
+          setPill(
+            publisherStatus,
+            message.hasPublisher ? `Publisher 在线 · ${message.publisherId || 'unknown'}` : 'Publisher 不在线',
+            message.hasPublisher ? 'ok' : 'warn'
+          );
+          return;
+        }
+
+        if (message.type === 'debug_frame_queued') {
+          clearPendingRequestTimer();
+          lastRequestId = message.requestId;
+          requestIdValue.textContent = message.requestId;
+          setPill(requestStatus, '请求已发送，等待 iOS 返回', 'warn');
+          appendLog(`debug_frame_queued requestId=${message.requestId} query=${message.query || '(empty)'}`);
+          pendingRequestTimer = window.setTimeout(() => {
+            failPendingRequest('等待 iOS 返回超时');
+          }, 15000);
+          return;
+        }
+
+        if (message.type === 'debug_frame_result') {
+          clearPendingRequestTimer();
+          const isCurrentRequest = message.requestId === lastRequestId;
+          if (!isCurrentRequest) {
+            appendLog(`收到非当前请求的结果 requestId=${message.requestId}`);
+          }
+
+          if (isCurrentRequest) {
+            lastRequestId = null;
+          }
+
+          if (message.status === 'error') {
+            setPill(requestStatus, '请求失败', 'danger');
+            appendLog(`debug_frame_result error=${message.error || 'unknown'}`);
+            return;
+          }
+
+          setPill(requestStatus, '请求完成', 'ok');
+          appendLog(`debug_frame_result ok requestId=${message.requestId}`);
+          renderResult(message);
+          return;
+        }
+
+        if (message.type === 'warning' || message.type === 'error') {
+          appendLog(`${message.type}: ${message.message || 'unknown'}`);
+          return;
+        }
+
+        appendLog(`收到消息 ${message.type}`);
+      }
+
+      function disconnectSocket() {
+        clearPendingRequestTimer();
+        if (socket) {
+          socket.close();
+          socket = null;
+        }
+        setConnectedState(false);
+      }
+
+      function connectSocket() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          disconnectSocket();
+          return;
+        }
+
+        const url = buildSocketUrl();
+        appendLog(`连接 ${url}`);
+        socket = new WebSocket(url);
+        setPill(socketStatus, '连接中', 'warn');
+
+        socket.addEventListener('open', () => {
+          setConnectedState(true);
+          appendLog('WebSocket 已连接');
+        });
+
+        socket.addEventListener('message', handleMessage);
+
+        socket.addEventListener('close', () => {
+          failPendingRequest('调试通道已断开');
+          appendLog('WebSocket 已断开');
+          disconnectSocket();
+        });
+
+        socket.addEventListener('error', () => {
+          appendLog('WebSocket 发生错误');
+          setPill(socketStatus, '连接错误', 'danger');
+        });
+      }
+
+      function requestDebugFrame() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          appendLog('调试通道未连接');
+          return;
+        }
+
+        const requestId = `debug-${Date.now().toString(36)}`;
+        clearPendingRequestTimer();
+        lastRequestId = requestId;
+        frameOverlay.innerHTML = '';
+        setPill(requestStatus, '请求发送中', 'warn');
+        pendingRequestTimer = window.setTimeout(() => {
+          failPendingRequest('服务端未确认请求，可能仍连接着旧版 server');
+        }, 4000);
+        socket.send(JSON.stringify({
+          type: 'debug_frame_request',
+          requestId,
+          query: queryInput.value.trim()
+        }));
+      }
+
+      connectButton.addEventListener('click', connectSocket);
+      requestButton.addEventListener('click', requestDebugFrame);
+
+      if (params.get('autoconnect') !== '0') {
+        connectSocket();
+      }
+    </script>
+  </body>
+</html>
