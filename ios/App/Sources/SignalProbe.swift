@@ -1,6 +1,19 @@
 import Foundation
 import Observation
 
+struct CalibrationPoint: Equatable {
+    let x: Double
+    let y: Double
+}
+
+struct CalibrationCommandState: Equatable {
+    let sessionID: String
+    let stepID: String
+    let label: String
+    let phase: String
+    let target: CalibrationPoint
+}
+
 @MainActor
 @Observable
 final class SignalProbe {
@@ -14,6 +27,12 @@ final class SignalProbe {
 
     private(set) var state: ProbeState = .idle
     private(set) var logs: [String] = ["等待主动连接..."]
+    private(set) var calibrationStatus = "标定通道未激活"
+    private(set) var calibrationCommand: CalibrationCommandState?
+    private(set) var isCalibrationTapArmed = false
+    private(set) var isCalibrationSessionActive = false
+    private(set) var lastCalibrationTap: CalibrationPoint?
+    private(set) var calibrationResultSummary = "暂无标定结果"
 
     var isConnectedOrConnecting: Bool {
         state == .connecting || state == .connected
@@ -23,6 +42,7 @@ final class SignalProbe {
     private var webSocketTask: URLSessionWebSocketTask?
     private var pingTimer: Timer?
     private let isoFormatter = ISO8601DateFormatter()
+    private var didSendCalibrationRegistration = false
 
     func connect(configuration: StreamConfiguration) {
         disconnect(resetLogs: false, reason: "开始新的主动诊断连接")
@@ -81,6 +101,10 @@ final class SignalProbe {
         webSocketTask = nil
         session?.invalidateAndCancel()
         session = nil
+        didSendCalibrationRegistration = false
+        calibrationCommand = nil
+        isCalibrationTapArmed = false
+        isCalibrationSessionActive = false
 
         if state != .idle {
             state = .disconnected
@@ -89,6 +113,62 @@ final class SignalProbe {
 
     func clearLogs() {
         logs = ["等待主动连接..."]
+    }
+
+    func clearCalibrationState() {
+        calibrationCommand = nil
+        isCalibrationTapArmed = false
+        lastCalibrationTap = nil
+        calibrationStatus = isCalibrationSessionActive
+            ? "标定进行中"
+            : (state == .connected ? "标定通道已连接" : "标定通道未激活")
+        calibrationResultSummary = "暂无标定结果"
+        appendLog("已清空标定状态")
+    }
+
+    func reportCalibrationTap(_ point: CalibrationPoint) {
+        guard state == .connected else {
+            appendLog("标定点击已忽略：probe 未连接")
+            return
+        }
+
+        guard let command = calibrationCommand, isCalibrationTapArmed else {
+            appendLog("标定点击已忽略：当前没有待采集步骤")
+            return
+        }
+
+        guard let payload = makeJSONString(from: [
+            "type": "calibration_result",
+            "sessionId": command.sessionID,
+            "stepId": command.stepID,
+            "point": [
+                "x": point.x,
+                "y": point.y
+            ],
+            "reportedAt": isoFormatter.string(from: Date())
+        ]) else {
+            appendLog("标定点击上报失败：消息序列化失败")
+            return
+        }
+
+        webSocketTask?.send(.string(payload)) { [weak self] error in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+
+                if let error {
+                    self.appendLog("标定点击上报失败: \(error.localizedDescription)")
+                    return
+                }
+
+                self.lastCalibrationTap = point
+                self.isCalibrationTapArmed = false
+                self.calibrationStatus = "已上报 \(command.label) 点击: (\(format(point.x)), \(format(point.y)))"
+                self.calibrationResultSummary = self.calibrationStatus
+                self.appendLog("已上报标定点击 \(command.stepID): x=\(format(point.x)) y=\(format(point.y))")
+            }
+        }
     }
 
     private func buildProbeURL(configuration: StreamConfiguration) -> URL? {
@@ -161,9 +241,18 @@ final class SignalProbe {
         case "probe_ready":
             state = .connected
             appendLog("probe_ready: hasPublisher=\(json["hasPublisher"] as? Bool ?? false) viewerCount=\(json["viewerCount"] as? Int ?? 0)")
+            registerCalibrationRoleIfNeeded()
         case "room_state":
             state = .connected
-            appendLog("room_state: hasPublisher=\(json["hasPublisher"] as? Bool ?? false) viewerCount=\(json["viewerCount"] as? Int ?? 0) probeCount=\(json["probeCount"] as? Int ?? 0)")
+            appendLog("room_state: hasPublisher=\(json["hasPublisher"] as? Bool ?? false) viewerCount=\(json["viewerCount"] as? Int ?? 0) probeCount=\(json["probeCount"] as? Int ?? 0) hasCalibrationApp=\(json["hasCalibrationApp"] as? Bool ?? false)")
+        case "calibration_registered":
+            calibrationStatus = "已注册为标定 App"
+            calibrationResultSummary = "服务端已识别当前 App 可接收标定点击"
+            appendLog("calibration_registered: role=app")
+        case "calibration_command":
+            handleCalibrationCommand(json)
+        case "calibration_status":
+            handleCalibrationStatus(json)
         case "warning":
             appendLog("服务端警告: \((json["message"] as? String) ?? "")")
         case "error":
@@ -213,6 +302,122 @@ final class SignalProbe {
         pingTimer = nil
     }
 
+    private func registerCalibrationRoleIfNeeded() {
+        guard !didSendCalibrationRegistration else {
+            return
+        }
+
+        didSendCalibrationRegistration = true
+        guard let payload = makeJSONString(from: [
+            "type": "calibration_register",
+            "role": "app"
+        ]) else {
+            appendLog("标定角色注册失败：消息序列化失败")
+            return
+        }
+
+        webSocketTask?.send(.string(payload)) { [weak self] error in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+
+                if let error {
+                    self.appendLog("标定角色注册失败: \(error.localizedDescription)")
+                    return
+                }
+
+                self.appendLog("已向服务端注册标定 App 角色")
+            }
+        }
+    }
+
+    private func handleCalibrationCommand(_ json: [String: Any]) {
+        let method = json["method"] as? String ?? ""
+        switch method {
+        case "armTapCapture":
+            guard let sessionID = json["sessionId"] as? String,
+                  let stepID = json["stepId"] as? String,
+                  let label = json["label"] as? String,
+                  let phase = json["phase"] as? String,
+                  let targetPayload = json["target"] as? [String: Any],
+                  let target = decodeCalibrationPoint(targetPayload)
+            else {
+                appendLog("收到无效的 calibration_command")
+                return
+            }
+
+            calibrationCommand = CalibrationCommandState(
+                sessionID: sessionID,
+                stepID: stepID,
+                label: label,
+                phase: phase,
+                target: target
+            )
+            isCalibrationSessionActive = true
+            isCalibrationTapArmed = true
+            calibrationStatus = "等待采集 \(label) 点击"
+            calibrationResultSummary = "目标点: (\(format(target.x)), \(format(target.y))) / phase=\(phase)"
+            appendLog("calibration_command armTapCapture step=\(stepID) target=(\(format(target.x)), \(format(target.y)))")
+        case "clearTapCapture":
+            calibrationCommand = nil
+            isCalibrationTapArmed = false
+            isCalibrationSessionActive = false
+            calibrationStatus = json["reason"] as? String ?? "标定采集已结束"
+            appendLog("calibration_command clearTapCapture")
+        default:
+            appendLog("未处理的 calibration_command: \(method)")
+        }
+    }
+
+    private func handleCalibrationStatus(_ json: [String: Any]) {
+        let status = json["status"] as? String ?? "unknown"
+        let message = json["message"] as? String ?? ""
+        calibrationStatus = message.isEmpty ? status : "\(status): \(message)"
+
+        if ["starting", "arming", "dispatching", "awaiting_tap", "captured", "solved"].contains(status) {
+            isCalibrationSessionActive = true
+        }
+
+        if status == "completed" || status == "error" || status == "stopped" {
+            calibrationCommand = nil
+            isCalibrationTapArmed = false
+            isCalibrationSessionActive = false
+        }
+
+        if let detail = json["detail"] as? [String: Any],
+           let summaryData = try? JSONSerialization.data(withJSONObject: detail, options: [.prettyPrinted]),
+           let summary = String(data: summaryData, encoding: .utf8) {
+            calibrationResultSummary = summary
+        } else {
+            calibrationResultSummary = message.isEmpty ? status : message
+        }
+
+        appendLog("calibration_status: \(status) \(message)")
+    }
+
+    private func decodeCalibrationPoint(_ value: [String: Any]) -> CalibrationPoint? {
+        guard let x = value["x"] as? Double ?? (value["x"] as? NSNumber)?.doubleValue,
+              let y = value["y"] as? Double ?? (value["y"] as? NSNumber)?.doubleValue
+        else {
+            return nil
+        }
+
+        return CalibrationPoint(x: x, y: y)
+    }
+
+    private func makeJSONString(from object: [String: Any]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: []) else {
+            return nil
+        }
+
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func format(_ value: Double) -> String {
+        String(format: "%.3f", value)
+    }
+
     fileprivate func didOpen() {
         state = .connected
         appendLog("WebSocket 已打开")
@@ -222,6 +427,9 @@ final class SignalProbe {
     fileprivate func didClose(code: URLSessionWebSocketTask.CloseCode, reason: String) {
         stopPingLoop()
         state = .disconnected
+        isCalibrationSessionActive = false
+        isCalibrationTapArmed = false
+        calibrationCommand = nil
         appendLog("WebSocket 已关闭 code=\(code.rawValue) reason=\(reason.isEmpty ? "<empty>" : reason)")
     }
 
@@ -233,6 +441,9 @@ final class SignalProbe {
 
         stopPingLoop()
         state = .failed
+        isCalibrationSessionActive = false
+        isCalibrationTapArmed = false
+        calibrationCommand = nil
         appendLog("连接失败: \(error.localizedDescription)")
     }
 }

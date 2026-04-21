@@ -363,13 +363,17 @@
           <div class="actions">
             <button id="connectButton" class="secondary" type="button">连接调试通道</button>
             <button id="requestButton" class="primary" type="button" disabled>发送内存帧请求</button>
+            <button id="calibrationButton" class="secondary" type="button" disabled>开始 3 点标定</button>
           </div>
 
           <div class="status-strip">
             <span id="socketStatus" class="pill warn">未连接</span>
             <span id="publisherStatus" class="pill warn">Publisher 未知</span>
             <span id="requestStatus" class="pill">等待请求</span>
+            <span id="calibrationStatus" class="pill">未标定</span>
           </div>
+
+          <div id="calibrationSummary" class="console">等待开始标定...</div>
 
           <div id="console" class="console"></div>
         </section>
@@ -434,9 +438,12 @@
       const queryInput = document.getElementById('queryInput');
       const connectButton = document.getElementById('connectButton');
       const requestButton = document.getElementById('requestButton');
+      const calibrationButton = document.getElementById('calibrationButton');
       const socketStatus = document.getElementById('socketStatus');
       const publisherStatus = document.getElementById('publisherStatus');
       const requestStatus = document.getElementById('requestStatus');
+      const calibrationStatus = document.getElementById('calibrationStatus');
+      const calibrationSummary = document.getElementById('calibrationSummary');
       const consoleView = document.getElementById('console');
       const frameEmpty = document.getElementById('frameEmpty');
       const frameImage = document.getElementById('frameImage');
@@ -476,8 +483,19 @@
 
       function setConnectedState(connected) {
         requestButton.disabled = !connected;
+        calibrationButton.disabled = !connected;
         connectButton.textContent = connected ? '断开调试通道' : '连接调试通道';
         setPill(socketStatus, connected ? '调试通道已连接' : '未连接', connected ? 'ok' : 'warn');
+      }
+
+      function renderCalibrationSummary(message) {
+        const detail = message.detail == null
+          ? '无详细信息'
+          : JSON.stringify(message.detail, null, 2);
+        const calibration = message.calibration == null
+          ? 'null'
+          : JSON.stringify(message.calibration, null, 2);
+        calibrationSummary.textContent = `status: ${message.status || 'unknown'}\nmessage: ${message.message || ''}\n\ndetail:\n${detail}\n\ncalibration:\n${calibration}`;
       }
 
       function clearPendingRequestTimer() {
@@ -587,6 +605,9 @@
             message.hasPublisher ? `Publisher 在线 · ${message.publisherId || 'unknown'}` : 'Publisher 不在线',
             message.hasPublisher ? 'ok' : 'warn'
           );
+          if (message.calibration) {
+            setPill(calibrationStatus, '已有标定参数', 'ok');
+          }
           appendLog(`room_state hasPublisher=${Boolean(message.hasPublisher)} viewerCount=${message.viewerCount || 0} probeCount=${message.probeCount || 0}`);
           return;
         }
@@ -633,6 +654,16 @@
           setPill(requestStatus, '请求完成', 'ok');
           appendLog(`debug_frame_result ok requestId=${message.requestId}`);
           renderResult(message);
+          return;
+        }
+
+        if (message.type === 'calibration_status') {
+          const tone = message.status === 'completed'
+            ? 'ok'
+            : (message.status === 'error' ? 'danger' : 'warn');
+          setPill(calibrationStatus, message.message || message.status || '标定中', tone);
+          renderCalibrationSummary(message);
+          appendLog(`calibration_status ${message.status || 'unknown'} ${message.message || ''}`);
           return;
         }
 
@@ -704,8 +735,22 @@
         }));
       }
 
+      function startCalibration() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          appendLog('调试通道未连接');
+          return;
+        }
+
+        setPill(calibrationStatus, '标定启动中', 'warn');
+        calibrationSummary.textContent = '正在请求服务端启动标定...';
+        socket.send(JSON.stringify({
+          type: 'calibration_start'
+        }));
+      }
+
       connectButton.addEventListener('click', connectSocket);
       requestButton.addEventListener('click', requestDebugFrame);
+      calibrationButton.addEventListener('click', startCalibration);
 
       if (params.get('autoconnect') !== '0') {
         connectSocket();

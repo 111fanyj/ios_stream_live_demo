@@ -13,9 +13,24 @@ const port = Number(process.env.PORT || 3000);
 const automationRoot = path.join(__dirname, 'data', 'automation');
 const rooms = new Map();
 const automationSessions = new Map();
+const calibrationSessions = new Map();
 const debugFrameRequests = new Map();
 let nextClientId = 1;
 let nextAutomationSequence = 1;
+
+const calibrationSampleSteps = [
+  { id: 'sample-top-left', label: '左上锚点', target: { x: 0.18, y: 0.18 } },
+  { id: 'sample-top-right', label: '右上锚点', target: { x: 0.82, y: 0.18 } },
+  { id: 'sample-bottom-center', label: '下方锚点', target: { x: 0.50, y: 0.78 } }
+];
+
+const calibrationVerifyStep = {
+  id: 'verify-mid-left',
+  label: '验证点',
+  target: { x: 0.28, y: 0.62 }
+};
+
+const calibrationVerificationThreshold = 0.035;
 
 function log(...parts) {
   console.log(new Date().toISOString(), ...parts);
@@ -56,6 +71,9 @@ function getRoom(roomId) {
       executor: null,
       viewers: new Map(),
       probes: new Map(),
+      calibrationAppId: null,
+      calibration: null,
+      calibrationUpdatedAt: null,
       publisherConnectedAt: null,
       executorConnectedAt: null
     });
@@ -80,6 +98,29 @@ function getProbeIds(room) {
 
 function getExecutorId(room) {
   return room.executor?.clientId ?? null;
+}
+
+function getCalibrationSummary(room) {
+  if (!room?.calibration) {
+    return null;
+  }
+
+  return {
+    scaleX: room.calibration.scaleX,
+    scaleY: room.calibration.scaleY,
+    offsetX: room.calibration.offsetX,
+    offsetY: room.calibration.offsetY,
+    updatedAt: room.calibrationUpdatedAt
+  };
+}
+
+function getCalibrationApp(roomId) {
+  const room = getRoom(roomId);
+  if (!room.calibrationAppId) {
+    return null;
+  }
+
+  return room.probes.get(room.calibrationAppId) ?? null;
 }
 
 function getDebugRequesterById(room, clientId) {
@@ -178,6 +219,9 @@ function broadcastRoomState(roomId) {
     publisherId: room.publisher?.clientId ?? null,
     hasExecutor: Boolean(room.executor),
     executorId: getExecutorId(room),
+    hasCalibrationApp: isClientOpen(getCalibrationApp(roomId)),
+    calibrationAppId: room.calibrationAppId,
+    calibration: getCalibrationSummary(room),
     viewerCount: room.viewers.size,
     probeCount: room.probes.size,
     publisherConnectedAt: room.publisherConnectedAt,
@@ -191,6 +235,9 @@ function broadcastRoomState(roomId) {
     publisherId: room.publisher?.clientId ?? null,
     hasExecutor: Boolean(room.executor),
     executorId: getExecutorId(room),
+    hasCalibrationApp: isClientOpen(getCalibrationApp(roomId)),
+    calibrationAppId: room.calibrationAppId,
+    calibration: getCalibrationSummary(room),
     viewerCount: room.viewers.size,
     viewerIds: getViewerIds(room),
     probeCount: room.probes.size,
@@ -219,7 +266,7 @@ function broadcastRoomState(roomId) {
 }
 
 function safeSend(ws, payload) {
-  if (ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload));
   }
 }
@@ -329,6 +376,23 @@ function resolveAutomationTarget(session, target) {
   return normalizePoint(target);
 }
 
+function applyCalibrationPoint(roomId, point) {
+  const normalized = normalizePoint(point);
+  if (!normalized) {
+    return null;
+  }
+
+  const calibration = getRoom(roomId).calibration;
+  if (!calibration) {
+    return normalized;
+  }
+
+  return normalizePoint({
+    x: normalized.x * calibration.scaleX + calibration.offsetX,
+    y: normalized.y * calibration.scaleY + calibration.offsetY
+  });
+}
+
 function collectImageAssetIds(steps) {
   const assetIds = new Set();
   for (const step of steps) {
@@ -341,6 +405,19 @@ function collectImageAssetIds(steps) {
 
 function getAutomationSession(roomId, sessionId) {
   const session = automationSessions.get(roomId);
+  if (!session) {
+    return null;
+  }
+
+  if (sessionId && session.sessionId !== sessionId) {
+    return null;
+  }
+
+  return session;
+}
+
+function getCalibrationSession(roomId, sessionId) {
+  const session = calibrationSessions.get(roomId);
   if (!session) {
     return null;
   }
@@ -419,6 +496,31 @@ function clearPendingExecutorCommand(session) {
   clearPendingSessionCommand(session, 'pendingExecutorCommand');
 }
 
+function clearCalibrationTimer(session) {
+  if (session?.timer) {
+    clearTimeout(session.timer);
+    session.timer = null;
+  }
+}
+
+function clearPendingCalibrationExecutor(session) {
+  if (session?.pendingExecutorCommand?.timeoutHandle) {
+    clearTimeout(session.pendingExecutorCommand.timeoutHandle);
+  }
+  if (session) {
+    session.pendingExecutorCommand = null;
+  }
+}
+
+function clearPendingCalibrationCapture(session) {
+  if (session?.pendingCapture?.timeoutHandle) {
+    clearTimeout(session.pendingCapture.timeoutHandle);
+  }
+  if (session) {
+    session.pendingCapture = null;
+  }
+}
+
 function broadcastAutomationPayload(roomId, payload) {
   const room = getRoom(roomId);
   for (const viewer of room.viewers.values()) {
@@ -428,6 +530,492 @@ function broadcastAutomationPayload(roomId, payload) {
   for (const probe of room.probes.values()) {
     safeSend(probe, payload);
   }
+}
+
+function broadcastCalibrationPayload(roomId, payload) {
+  const room = getRoom(roomId);
+  for (const viewer of room.viewers.values()) {
+    safeSend(viewer, payload);
+  }
+
+  for (const probe of room.probes.values()) {
+    safeSend(probe, payload);
+  }
+}
+
+function broadcastCalibrationStatus(session, status, message, detail = null) {
+  broadcastCalibrationPayload(session.roomId, {
+    type: 'calibration_status',
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    ownerClientId: session.ownerClientId,
+    appClientId: session.appClientId,
+    status,
+    message,
+    detail,
+    calibration: getCalibrationSummary(getRoom(session.roomId)),
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function sendCalibrationCommand(roomId, payload) {
+  const appClient = getCalibrationApp(roomId);
+  if (!isClientOpen(appClient)) {
+    return false;
+  }
+
+  safeSend(appClient, payload);
+  return true;
+}
+
+function finalizeCalibrationSession(roomId, status, message, options = {}) {
+  const session = calibrationSessions.get(roomId);
+  if (!session) {
+    return;
+  }
+
+  clearCalibrationTimer(session);
+  clearPendingCalibrationExecutor(session);
+  clearPendingCalibrationCapture(session);
+  calibrationSessions.delete(roomId);
+
+  sendCalibrationCommand(roomId, {
+    type: 'calibration_command',
+    method: 'clearTapCapture',
+    sessionId: session.sessionId,
+    reason: message
+  });
+
+  broadcastCalibrationStatus(session, status, message, options.detail ?? null);
+}
+
+function computeAxisCorrection(samples, axis) {
+  const pairs = samples
+    .map((sample) => ({ input: Number(sample.target?.[axis]), actual: Number(sample.actual?.[axis]) }))
+    .filter((pair) => Number.isFinite(pair.input) && Number.isFinite(pair.actual));
+
+  if (pairs.length < 2) {
+    throw makeStatusError(`标定样本不足，无法计算 ${axis} 轴`, 500);
+  }
+
+  const meanInput = pairs.reduce((total, pair) => total + pair.input, 0) / pairs.length;
+  const meanActual = pairs.reduce((total, pair) => total + pair.actual, 0) / pairs.length;
+  let variance = 0;
+  let covariance = 0;
+  for (const pair of pairs) {
+    variance += (pair.input - meanInput) ** 2;
+    covariance += (pair.input - meanInput) * (pair.actual - meanActual);
+  }
+
+  if (!Number.isFinite(variance) || variance <= 0) {
+    throw makeStatusError(`标定样本退化，无法计算 ${axis} 轴`, 500);
+  }
+
+  const observedScale = covariance / variance;
+  const observedOffset = meanActual - observedScale * meanInput;
+  if (!Number.isFinite(observedScale) || Math.abs(observedScale) < 0.001) {
+    throw makeStatusError(`标定结果异常，${axis} 轴 scale 无效`, 500);
+  }
+
+  return {
+    observedScale,
+    observedOffset,
+    correctionScale: 1 / observedScale,
+    correctionOffset: -observedOffset / observedScale
+  };
+}
+
+function buildRoomCalibration(samples) {
+  const xAxis = computeAxisCorrection(samples, 'x');
+  const yAxis = computeAxisCorrection(samples, 'y');
+  return {
+    scaleX: xAxis.correctionScale,
+    offsetX: xAxis.correctionOffset,
+    scaleY: yAxis.correctionScale,
+    offsetY: yAxis.correctionOffset,
+    observedScaleX: xAxis.observedScale,
+    observedOffsetX: xAxis.observedOffset,
+    observedScaleY: yAxis.observedScale,
+    observedOffsetY: yAxis.observedOffset,
+    sampleCount: samples.length
+  };
+}
+
+function computePointError(target, actual) {
+  const normalizedTarget = normalizePoint(target);
+  const normalizedActual = normalizePoint(actual);
+  if (!normalizedTarget || !normalizedActual) {
+    return null;
+  }
+
+  const deltaX = normalizedActual.x - normalizedTarget.x;
+  const deltaY = normalizedActual.y - normalizedTarget.y;
+  return {
+    deltaX,
+    deltaY,
+    distance: Math.sqrt(deltaX ** 2 + deltaY ** 2)
+  };
+}
+
+function getCurrentCalibrationStep(session) {
+  if (session.phase === 'verify') {
+    return calibrationVerifyStep;
+  }
+
+  return calibrationSampleSteps[session.currentStepIndex] ?? null;
+}
+
+function dispatchCalibrationTap(session, step, options = {}) {
+  const rawTarget = normalizePoint(step.target);
+  const target = options.useCalibration ? applyCalibrationPoint(session.roomId, rawTarget) : rawTarget;
+  if (!target) {
+    finalizeCalibrationSession(session.roomId, 'error', `标定点 ${step.id} 无效`);
+    return;
+  }
+
+  const requestId = makeAutomationId('calibration-request');
+  const command = {
+    type: 'executor_command',
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    requestId,
+    action: 'tap',
+    stepId: step.id,
+    payload: {
+      point: target
+    }
+  };
+
+  if (!sendToExecutor(session.roomId, command)) {
+    finalizeCalibrationSession(session.roomId, 'error', 'Executor 当前不可用');
+    return;
+  }
+
+  const timeoutHandle = setTimeout(() => {
+    const activeSession = getCalibrationSession(session.roomId, session.sessionId);
+    if (!activeSession || activeSession.pendingExecutorCommand?.requestId !== requestId) {
+      return;
+    }
+
+    finalizeCalibrationSession(session.roomId, 'error', `标定点击 ${step.label} 超时`);
+  }, 15_000);
+
+  session.pendingExecutorCommand = {
+    requestId,
+    action: 'tap',
+    stepId: step.id,
+    timeoutHandle,
+    rawTarget,
+    commandTarget: target,
+    phase: session.phase,
+    label: step.label
+  };
+
+  broadcastCalibrationStatus(session, 'dispatching', `已发送标定点击: ${step.label}`, {
+    stepId: step.id,
+    label: step.label,
+    phase: session.phase,
+    rawTarget,
+    commandTarget: target,
+    sampleIndex: session.currentStepIndex + 1,
+    sampleCount: calibrationSampleSteps.length
+  });
+}
+
+function executeCalibrationStep(session) {
+  if (session.pendingExecutorCommand || session.pendingCapture) {
+    return;
+  }
+
+  const room = getRoom(session.roomId);
+  if (!isClientOpen(room.executor)) {
+    finalizeCalibrationSession(session.roomId, 'error', 'Executor 已断开');
+    return;
+  }
+
+  if (!isClientOpen(getCalibrationApp(session.roomId)) || room.calibrationAppId !== session.appClientId) {
+    finalizeCalibrationSession(session.roomId, 'error', '标定 App 已断开');
+    return;
+  }
+
+  const step = getCurrentCalibrationStep(session);
+  if (!step) {
+    finalizeCalibrationSession(session.roomId, 'error', '没有可执行的标定步骤');
+    return;
+  }
+
+  if (!sendCalibrationCommand(session.roomId, {
+    type: 'calibration_command',
+    method: 'armTapCapture',
+    sessionId: session.sessionId,
+    stepId: step.id,
+    label: step.label,
+    phase: session.phase,
+    target: normalizePoint(step.target)
+  })) {
+    finalizeCalibrationSession(session.roomId, 'error', '标定 App 当前不可用');
+    return;
+  }
+
+  broadcastCalibrationStatus(session, 'arming', `准备采集 ${step.label}`, {
+    stepId: step.id,
+    label: step.label,
+    phase: session.phase,
+    target: normalizePoint(step.target),
+    sampleIndex: session.currentStepIndex + 1,
+    sampleCount: calibrationSampleSteps.length,
+    calibration: session.calibration
+  });
+
+  clearCalibrationTimer(session);
+  session.timer = setTimeout(() => {
+    const activeSession = getCalibrationSession(session.roomId, session.sessionId);
+    if (activeSession) {
+      dispatchCalibrationTap(activeSession, step, {
+        useCalibration: activeSession.phase === 'verify'
+      });
+    }
+  }, 220);
+}
+
+function startCalibrationSession(roomId, owner) {
+  const room = getRoom(roomId);
+  if (automationSessions.has(roomId)) {
+    throw makeStatusError('当前房间正在执行自动化，请先停止后再标定', 409);
+  }
+  if (!isClientOpen(room.executor)) {
+    throw makeStatusError('当前房间没有可用的 executor', 409);
+  }
+  if (!isClientOpen(getCalibrationApp(roomId))) {
+    throw makeStatusError('当前房间没有连接中的标定 App', 409);
+  }
+
+  if (calibrationSessions.has(roomId)) {
+    finalizeCalibrationSession(roomId, 'stopped', '被新的标定请求替换');
+  }
+
+  const session = {
+    sessionId: makeAutomationId('calibration-session'),
+    roomId,
+    ownerClientId: owner.clientId,
+    appClientId: room.calibrationAppId,
+    phase: 'sample',
+    currentStepIndex: 0,
+    samples: [],
+    calibration: null,
+    pendingExecutorCommand: null,
+    pendingCapture: null,
+    timer: null,
+    createdAt: new Date().toISOString()
+  };
+
+  calibrationSessions.set(roomId, session);
+  broadcastCalibrationStatus(session, 'starting', '开始 HID 点击标定', {
+    sampleCount: calibrationSampleSteps.length,
+    verifyTarget: calibrationVerifyStep.target,
+    existingCalibration: getCalibrationSummary(room)
+  });
+  executeCalibrationStep(session);
+  return session;
+}
+
+function handleCalibrationExecutorResult(roomId, message) {
+  const session = getCalibrationSession(roomId, message.sessionId);
+  if (!session) {
+    log('calibration_executor_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      requestId: message.requestId,
+      action: message.action,
+      reason: 'session_not_found'
+    });
+    return false;
+  }
+
+  const pendingCommand = session.pendingExecutorCommand;
+  if (!pendingCommand || pendingCommand.requestId !== message.requestId || pendingCommand.action !== message.action) {
+    log('calibration_executor_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      requestId: message.requestId,
+      action: message.action,
+      reason: 'request_mismatch'
+    });
+    return false;
+  }
+
+  clearPendingCalibrationExecutor(session);
+  if (message.status !== 'ok') {
+    finalizeCalibrationSession(session.roomId, 'error', message.error || `标定动作 ${message.action} 执行失败`);
+    return true;
+  }
+
+  const captureTimeout = setTimeout(() => {
+    const activeSession = getCalibrationSession(session.roomId, session.sessionId);
+    if (!activeSession || activeSession.pendingCapture?.stepId !== pendingCommand.stepId) {
+      return;
+    }
+
+    finalizeCalibrationSession(session.roomId, 'error', `等待 App 回传点击超时: ${pendingCommand.label}`);
+  }, 12_000);
+
+  session.pendingCapture = {
+    stepId: pendingCommand.stepId,
+    label: pendingCommand.label,
+    phase: pendingCommand.phase,
+    rawTarget: pendingCommand.rawTarget,
+    commandTarget: pendingCommand.commandTarget,
+    timeoutHandle: captureTimeout
+  };
+
+  broadcastCalibrationStatus(session, 'awaiting_tap', `等待 App 回传实际点击: ${pendingCommand.label}`, {
+    stepId: pendingCommand.stepId,
+    label: pendingCommand.label,
+    phase: pendingCommand.phase,
+    rawTarget: pendingCommand.rawTarget,
+    commandTarget: pendingCommand.commandTarget,
+    executorPayload: message.payload || null
+  });
+  return true;
+}
+
+function handleCalibrationResult(roomId, source, message) {
+  const session = getCalibrationSession(roomId, message.sessionId);
+  if (!session) {
+    log('calibration_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      stepId: message.stepId,
+      reason: 'session_not_found'
+    });
+    return;
+  }
+
+  if (source.clientId !== session.appClientId) {
+    safeSend(source, { type: 'error', message: 'Only the registered calibration app can report calibration taps' });
+    return;
+  }
+
+  const pendingCapture = session.pendingCapture;
+  if (!pendingCapture || pendingCapture.stepId !== message.stepId) {
+    log('calibration_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      stepId: message.stepId,
+      reason: 'capture_not_armed'
+    });
+    return;
+  }
+
+  const actualPoint = normalizePoint(message.point);
+  if (!actualPoint) {
+    safeSend(source, { type: 'error', message: 'Calibration point is missing or invalid' });
+    return;
+  }
+
+  clearPendingCalibrationCapture(session);
+  const step = getCurrentCalibrationStep(session);
+  if (!step || step.id !== message.stepId) {
+    finalizeCalibrationSession(session.roomId, 'error', '标定步骤与回传点击不一致');
+    return;
+  }
+
+  const errorDetail = computePointError(step.target, actualPoint);
+  if (session.phase === 'sample') {
+    session.samples.push({
+      stepId: step.id,
+      label: step.label,
+      target: normalizePoint(step.target),
+      actual: actualPoint,
+      error: errorDetail
+    });
+
+    broadcastCalibrationStatus(session, 'captured', `已采集 ${step.label}`, {
+      stepId: step.id,
+      label: step.label,
+      target: normalizePoint(step.target),
+      actual: actualPoint,
+      error: errorDetail,
+      sampleIndex: session.currentStepIndex + 1,
+      sampleCount: calibrationSampleSteps.length
+    });
+
+    session.currentStepIndex += 1;
+    if (session.currentStepIndex >= calibrationSampleSteps.length) {
+      try {
+        const calibration = buildRoomCalibration(session.samples);
+        session.calibration = calibration;
+        const room = getRoom(session.roomId);
+        room.calibration = calibration;
+        room.calibrationUpdatedAt = new Date().toISOString();
+        session.phase = 'verify';
+        session.currentStepIndex = calibrationSampleSteps.length;
+        broadcastRoomState(session.roomId);
+        broadcastCalibrationStatus(session, 'solved', '已求出坐标校正参数，开始验证', {
+          calibration,
+          samples: session.samples,
+          verifyTarget: calibrationVerifyStep.target
+        });
+      } catch (error) {
+        finalizeCalibrationSession(session.roomId, 'error', error.message || '计算标定参数失败', {
+          samples: session.samples
+        });
+        return;
+      }
+    }
+
+    clearCalibrationTimer(session);
+    session.timer = setTimeout(() => {
+      const activeSession = getCalibrationSession(session.roomId, session.sessionId);
+      if (activeSession) {
+        executeCalibrationStep(activeSession);
+      }
+    }, 600);
+    return;
+  }
+
+  const verification = {
+    target: normalizePoint(calibrationVerifyStep.target),
+    actual: actualPoint,
+    error: computePointError(calibrationVerifyStep.target, actualPoint),
+    threshold: calibrationVerificationThreshold
+  };
+
+  if (!verification.error || verification.error.distance > calibrationVerificationThreshold) {
+    finalizeCalibrationSession(session.roomId, 'error', '标定验证失败，误差超出阈值', {
+      calibration: session.calibration,
+      verification,
+      samples: session.samples
+    });
+    return;
+  }
+
+  finalizeCalibrationSession(session.roomId, 'completed', '标定完成，校正参数已生效', {
+    calibration: session.calibration,
+    verification,
+    samples: session.samples
+  });
+}
+
+function registerCalibrationApp(roomId, client) {
+  const room = getRoom(roomId);
+  if (room.calibrationAppId && room.calibrationAppId !== client.clientId) {
+    const previousApp = room.probes.get(room.calibrationAppId);
+    safeSend(previousApp, {
+      type: 'warning',
+      message: 'Calibration app replaced by a new connection'
+    });
+  }
+
+  room.calibrationAppId = client.clientId;
+  safeSend(client, {
+    type: 'calibration_registered',
+    role: 'app',
+    clientId: client.clientId,
+    roomId,
+    calibration: getCalibrationSummary(room)
+  });
+  broadcastRoomState(roomId);
 }
 
 function buildAutomationStatusPayload(session, status, message, extra = {}) {
@@ -1056,9 +1644,17 @@ function executeAutomationStep(session) {
   }
 
   if (step.type === 'tap') {
-    const point = resolveAutomationTarget(session, step.target);
-    if (!point) {
+    const rawPoint = resolveAutomationTarget(session, step.target);
+    if (!rawPoint) {
       finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标不存在`, {
+        stepId: step.id
+      });
+      return;
+    }
+
+    const point = applyCalibrationPoint(session.roomId, rawPoint);
+    if (!point) {
+      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标校正失败`, {
         stepId: step.id
       });
       return;
@@ -1069,15 +1665,24 @@ function executeAutomationStep(session) {
       timeoutMs: 15_000,
       nextDelayMs: Number(step.postActionDelayMs) || 350
     });
-    broadcastAutomationAction(session, step, 'tap', { point, requestId });
+    broadcastAutomationAction(session, step, 'tap', { point, rawPoint, requestId });
     return;
   }
 
   if (step.type === 'drag') {
-    const from = resolveAutomationTarget(session, step.from);
-    const to = resolveAutomationTarget(session, step.to);
-    if (!from || !to) {
+    const rawFrom = resolveAutomationTarget(session, step.from);
+    const rawTo = resolveAutomationTarget(session, step.to);
+    if (!rawFrom || !rawTo) {
       finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标不存在`, {
+        stepId: step.id
+      });
+      return;
+    }
+
+    const from = applyCalibrationPoint(session.roomId, rawFrom);
+    const to = applyCalibrationPoint(session.roomId, rawTo);
+    if (!from || !to) {
+      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标校正失败`, {
         stepId: step.id
       });
       return;
@@ -1095,6 +1700,8 @@ function executeAutomationStep(session) {
       nextDelayMs: Number(step.postActionDelayMs) || 500
     });
     broadcastAutomationAction(session, step, 'drag', {
+      rawFrom,
+      rawTo,
       ...command,
       requestId
     });
@@ -1250,6 +1857,10 @@ function handleAutomationResult(roomId, message) {
 }
 
 function handleExecutorResult(roomId, message) {
+  if (handleCalibrationExecutorResult(roomId, message)) {
+    return;
+  }
+
   const session = getAutomationSession(roomId, message.sessionId);
   if (!session) {
     log('executor_result_ignored', {
@@ -1345,6 +1956,9 @@ app.get('/health', (_req, res) => {
     roomId,
     hasPublisher: Boolean(room.publisher),
     hasExecutor: Boolean(room.executor),
+    hasCalibrationApp: isClientOpen(getCalibrationApp(roomId)),
+    calibrationAppId: room.calibrationAppId,
+    calibration: getCalibrationSummary(room),
     viewerCount: room.viewers.size,
     probeCount: room.probes.size,
     publisherConnectedAt: room.publisherConnectedAt,
@@ -1697,9 +2311,65 @@ wss.on('connection', (ws, req) => {
       return;
     }
 
+    if (message.type === 'calibration_register') {
+      if (ws.clientType !== 'probe') {
+        safeSend(ws, { type: 'error', message: 'Only probe clients can register calibration app role' });
+        return;
+      }
+
+      if ((message.role || '') !== 'app') {
+        safeSend(ws, { type: 'error', message: 'Unsupported calibration role' });
+        return;
+      }
+
+      registerCalibrationApp(ws.roomId, ws);
+      return;
+    }
+
+    if (message.type === 'calibration_start') {
+      if (!['viewer', 'probe'].includes(ws.clientType)) {
+        safeSend(ws, { type: 'warning', message: 'Only viewer or probe clients can start calibration' });
+        return;
+      }
+
+      try {
+        startCalibrationSession(ws.roomId, ws);
+      } catch (error) {
+        const room = getRoom(ws.roomId);
+        broadcastCalibrationPayload(ws.roomId, {
+          type: 'calibration_status',
+          roomId: ws.roomId,
+          sessionId: null,
+          ownerClientId: ws.clientId,
+          appClientId: room.calibrationAppId,
+          status: 'error',
+          message: error.message || '启动标定失败',
+          detail: null,
+          calibration: getCalibrationSummary(room),
+          updatedAt: new Date().toISOString()
+        });
+      }
+      return;
+    }
+
+    if (message.type === 'calibration_result') {
+      if (ws.clientType !== 'probe') {
+        safeSend(ws, { type: 'error', message: 'Only probe clients can report calibration taps' });
+        return;
+      }
+
+      handleCalibrationResult(ws.roomId, ws, message);
+      return;
+    }
+
     if (message.type === 'automation_start') {
       if (ws.clientType !== 'viewer') {
         safeSend(ws, { type: 'warning', message: 'Only viewer clients can start automation' });
+        return;
+      }
+
+      if (calibrationSessions.has(ws.roomId)) {
+        safeSend(ws, { type: 'warning', message: 'Calibration is running, stop it before starting automation' });
         return;
       }
 
@@ -1884,6 +2554,11 @@ wss.on('connection', (ws, req) => {
       currentRoom.viewers.delete(ws.clientId);
       clearDebugFrameRequestsForClient(ws.roomId, ws.clientId);
 
+      const calibrationSession = calibrationSessions.get(ws.roomId);
+      if (calibrationSession && calibrationSession.ownerClientId === ws.clientId) {
+        finalizeCalibrationSession(ws.roomId, 'stopped', '标定发起端已断开');
+      }
+
       const session = automationSessions.get(ws.roomId);
       if (session && session.ownerViewerId === ws.clientId) {
         finalizeAutomationSession(ws.roomId, 'stopped', '控制端已断开', {
@@ -1902,6 +2577,19 @@ wss.on('connection', (ws, req) => {
     if (ws.clientType === 'probe') {
       currentRoom.probes.delete(ws.clientId);
       clearDebugFrameRequestsForClient(ws.roomId, ws.clientId);
+
+      if (currentRoom.calibrationAppId === ws.clientId) {
+        currentRoom.calibrationAppId = null;
+        const calibrationSession = calibrationSessions.get(ws.roomId);
+        if (calibrationSession && calibrationSession.appClientId === ws.clientId) {
+          finalizeCalibrationSession(ws.roomId, 'error', '标定 App 已断开');
+        }
+      }
+
+      const calibrationSession = calibrationSessions.get(ws.roomId);
+      if (calibrationSession && calibrationSession.ownerClientId === ws.clientId) {
+        finalizeCalibrationSession(ws.roomId, 'stopped', '标定发起端已断开');
+      }
     }
 
     if (ws.clientType === 'executor' && currentRoom.executor === ws) {
@@ -1915,6 +2603,7 @@ wss.on('connection', (ws, req) => {
 
     if (!currentRoom.publisher && !currentRoom.executor && currentRoom.viewers.size === 0 && currentRoom.probes.size === 0) {
       debugFrameRequests.delete(ws.roomId);
+      calibrationSessions.delete(ws.roomId);
       log('room_removed', { roomId: ws.roomId });
       rooms.delete(ws.roomId);
       return;

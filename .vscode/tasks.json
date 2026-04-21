@@ -17,6 +17,40 @@
 			],
 			"isBackground": false,
 			"group": "build"
+		},
+		{
+			"label": "build-ios-stream-viewer-calibration",
+			"type": "shell",
+			"command": "xcodebuild",
+			"args": [
+				"-project",
+				"/Volumes/mac_APFS/disk_dev/ESP32/IOS_stream_viewer/ios/IOSStreamViewer.xcodeproj",
+				"-scheme",
+				"IOSStreamViewer",
+				"-destination",
+				"generic/platform=iOS",
+				"CODE_SIGNING_ALLOWED=NO",
+				"build"
+			],
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "build-ios-stream-viewer-fullscreen-calibration",
+			"type": "shell",
+			"command": "xcodebuild",
+			"args": [
+				"-project",
+				"/Volumes/mac_APFS/disk_dev/ESP32/IOS_stream_viewer/ios/IOSStreamViewer.xcodeproj",
+				"-scheme",
+				"IOSStreamViewer",
+				"-destination",
+				"generic/platform=iOS",
+				"CODE_SIGNING_ALLOWED=NO",
+				"build"
+			],
+			"isBackground": false,
+			"group": "build"
 		}
 	]
 }

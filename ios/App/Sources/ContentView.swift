@@ -322,6 +322,60 @@ struct ContentView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
+                        Text("HID 点击标定")
+                            .font(.headline)
+
+                        Text("这个区域专门接收 HID 鼠标点击。先确保上面的主动信令诊断已连接到同一个 room，然后在网页上点击“开始标定”。服务端会依次驱动 HID 点击几个固定锚点，主 App 会把实际点击位置回传给服务端。")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+
+                        HStack {
+                            Button(signalProbe.isConnectedOrConnecting ? "断开标定通道" : "连接标定通道") {
+                                if signalProbe.isConnectedOrConnecting {
+                                    signalProbe.disconnect(reason: "用户断开标定通道")
+                                } else {
+                                    signalProbe.connect(configuration: configuration)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Button("清空最近点击") {
+                                signalProbe.clearCalibrationState()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Text("标定状态: \(signalProbe.calibrationStatus)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        if let command = signalProbe.calibrationCommand {
+                            Text("当前步骤: \(command.label) / 目标点 \(formatCalibrationPoint(command.target)) / phase=\(command.phase)")
+                                .font(.footnote)
+                                .foregroundStyle(signalProbe.isCalibrationTapArmed ? .green : .secondary)
+                        } else {
+                            Text("当前没有待采集的标定步骤")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        CalibrationSurfaceView(
+                            activeCommand: signalProbe.calibrationCommand,
+                            lastTap: signalProbe.lastCalibrationTap,
+                            isArmed: signalProbe.isCalibrationTapArmed
+                        ) { point in
+                            signalProbe.reportCalibrationTap(point)
+                        }
+                        .frame(maxWidth: .infinity)
+
+                        Text("最近标定结果")
+                            .font(.subheadline)
+                        Text(signalProbe.calibrationResultSummary)
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
                         Text("启动直播")
                             .font(.headline)
                         Text("优先用下面这个系统广播按钮测试。它会直接指定当前 App 对应的 Broadcast Extension。")
@@ -371,6 +425,15 @@ struct ContentView: View {
                     refreshDiagnostics()
                     try? await Task.sleep(for: .seconds(1))
                 }
+            }
+            .fullScreenCover(
+                isPresented: Binding(
+                    get: { signalProbe.isCalibrationSessionActive },
+                    set: { _ in }
+                )
+            ) {
+                CalibrationFullscreenView(signalProbe: signalProbe)
+                    .interactiveDismissDisabled(signalProbe.isCalibrationSessionActive)
             }
         }
     }
@@ -472,6 +535,10 @@ struct ContentView: View {
         String(format: "%.3f", confidence)
     }
 
+    private func formatCalibrationPoint(_ point: CalibrationPoint) -> String {
+        "(\(String(format: "%.3f", point.x)), \(String(format: "%.3f", point.y)))"
+    }
+
     private func testServerConnection() async {
         isTestingConnection = true
         defer { isTestingConnection = false }
@@ -535,6 +602,177 @@ struct ContentView: View {
         components.queryItems = nil
         components.path = "/health"
         return components.url
+    }
+}
+
+private struct CalibrationSurfaceView: View {
+    let activeCommand: CalibrationCommandState?
+    let lastTap: CalibrationPoint?
+    let isArmed: Bool
+    let surfaceHeight: CGFloat
+    let onTap: (CalibrationPoint) -> Void
+
+    init(
+        activeCommand: CalibrationCommandState?,
+        lastTap: CalibrationPoint?,
+        isArmed: Bool,
+        surfaceHeight: CGFloat = 320,
+        onTap: @escaping (CalibrationPoint) -> Void
+    ) {
+        self.activeCommand = activeCommand
+        self.lastTap = lastTap
+        self.isArmed = isArmed
+        self.surfaceHeight = surfaceHeight
+        self.onTap = onTap
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.orange.opacity(0.16), Color.blue.opacity(0.12)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(isArmed ? Color.green.opacity(0.7) : Color.secondary.opacity(0.25), style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(isArmed ? "等待 HID 点击" : "标定待命")
+                        .font(.headline)
+                    Text(isArmed ? "服务端已下发标定步骤，下一次点击会自动回传。" : "点击这里不会发起标定；请先在网页上点击“开始标定”。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+
+                if let command = activeCommand {
+                    calibrationMarker(
+                        title: command.label,
+                        point: command.target,
+                        color: .orange,
+                        size: size
+                    )
+                }
+
+                if let lastTap {
+                    calibrationMarker(
+                        title: "实际点击",
+                        point: lastTap,
+                        color: .green,
+                        size: size
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: surfaceHeight, maxHeight: surfaceHeight)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { value in
+                        guard size.width > 0, size.height > 0 else {
+                            return
+                        }
+
+                        let point = CalibrationPoint(
+                            x: min(1, max(0, value.location.x / size.width)),
+                            y: min(1, max(0, value.location.y / size.height))
+                        )
+                        onTap(point)
+                    }
+            )
+        }
+            .frame(height: surfaceHeight)
+    }
+
+    @ViewBuilder
+    private func calibrationMarker(title: String, point: CalibrationPoint, color: Color, size: CGSize) -> some View {
+        let markerSize: CGFloat = 22
+        let x = max(0, min(size.width - markerSize, CGFloat(point.x) * size.width - markerSize / 2))
+        let y = max(0, min(size.height - markerSize, CGFloat(point.y) * size.height - markerSize / 2))
+
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+
+            Circle()
+                .fill(color)
+                .frame(width: markerSize, height: markerSize)
+                .overlay {
+                    Circle()
+                        .stroke(Color.white, lineWidth: 2)
+                }
+        }
+        .position(x: x + markerSize / 2, y: y + markerSize / 2)
+    }
+}
+
+private struct CalibrationFullscreenView: View {
+    let signalProbe: SignalProbe
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                LinearGradient(
+                    colors: [Color.black, Color(red: 0.08, green: 0.1, blue: 0.14)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("HID 标定采点")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text(signalProbe.calibrationStatus)
+                            .font(.headline)
+                            .foregroundStyle(signalProbe.isCalibrationTapArmed ? Color.green : Color.white.opacity(0.82))
+                        if let command = signalProbe.calibrationCommand {
+                            Text("当前步骤: \(command.label) / 目标点 \(formatCalibrationPoint(command.target)) / phase=\(command.phase)")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.74))
+                        } else {
+                            Text("等待服务端下发标定步骤")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.74))
+                        }
+                    }
+
+                    CalibrationSurfaceView(
+                        activeCommand: signalProbe.calibrationCommand,
+                        lastTap: signalProbe.lastCalibrationTap,
+                        isArmed: signalProbe.isCalibrationTapArmed,
+                        surfaceHeight: max(geometry.size.height - 260, 320)
+                    ) { point in
+                        signalProbe.reportCalibrationTap(point)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("最近结果")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        Text(signalProbe.calibrationResultSummary)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.78))
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 26)
+            }
+        }
+    }
+
+    private func formatCalibrationPoint(_ point: CalibrationPoint) -> String {
+        "(\(String(format: "%.3f", point.x)), \(String(format: "%.3f", point.y)))"
     }
 }
 
