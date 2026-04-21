@@ -18,11 +18,30 @@ const debugFrameRequests = new Map();
 let nextClientId = 1;
 let nextAutomationSequence = 1;
 
-const calibrationSampleSteps = [
+const calibrationBaseAnchors = [
   { id: 'sample-top-left', label: '左上锚点', target: { x: 0.18, y: 0.18 } },
   { id: 'sample-top-right', label: '右上锚点', target: { x: 0.82, y: 0.18 } },
   { id: 'sample-bottom-center', label: '下方锚点', target: { x: 0.50, y: 0.78 } }
 ];
+
+const calibrationStepProfiles = [
+  { id: 'small', label: '小步幅', scale: 0.82 },
+  { id: 'medium', label: '中步幅', scale: 0.90 },
+  { id: 'large', label: '大步幅', scale: 0.98 }
+];
+
+const calibrationSampleSteps = calibrationBaseAnchors.flatMap((anchor) => calibrationStepProfiles.map((profile) => ({
+  id: `${anchor.id}-${profile.id}`,
+  label: `${anchor.label} · ${profile.label}`,
+  anchorLabel: anchor.label,
+  stepProfileLabel: profile.label,
+  stepScale: profile.scale,
+  displayTarget: anchor.target,
+  target: {
+    x: anchor.target.x * profile.scale,
+    y: anchor.target.y * profile.scale
+  }
+})));
 
 const calibrationVerifyStep = {
   id: 'verify-mid-left',
@@ -714,11 +733,56 @@ function dispatchCalibrationTap(session, step, options = {}) {
   broadcastCalibrationStatus(session, 'dispatching', `已发送标定点击: ${step.label}`, {
     stepId: step.id,
     label: step.label,
+    anchorLabel: step.anchorLabel ?? step.label,
+    stepProfileLabel: step.stepProfileLabel ?? null,
+    stepScale: step.stepScale ?? null,
     phase: session.phase,
     rawTarget,
+    displayTarget: normalizePoint(step.displayTarget ?? step.target),
     commandTarget: target,
     sampleIndex: session.currentStepIndex + 1,
     sampleCount: calibrationSampleSteps.length
+  });
+}
+
+function dispatchCalibrationHome(session) {
+  const requestId = makeAutomationId('calibration-home');
+  const command = {
+    type: 'executor_command',
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    requestId,
+    action: 'home',
+    stepId: 'pre-home',
+    payload: {}
+  };
+
+  if (!sendToExecutor(session.roomId, command)) {
+    finalizeCalibrationSession(session.roomId, 'error', 'Executor 当前不可用，无法执行预归位');
+    return;
+  }
+
+  const timeoutHandle = setTimeout(() => {
+    const activeSession = getCalibrationSession(session.roomId, session.sessionId);
+    if (!activeSession || activeSession.pendingExecutorCommand?.requestId !== requestId) {
+      return;
+    }
+
+    finalizeCalibrationSession(session.roomId, 'error', '标定预归位超时');
+  }, 10_000);
+
+  session.pendingExecutorCommand = {
+    requestId,
+    action: 'home',
+    stepId: 'pre-home',
+    timeoutHandle,
+    phase: 'prehome',
+    label: '预归位'
+  };
+
+  broadcastCalibrationStatus(session, 'preparing', '开始标定前先执行 HID home 归位', {
+    stepId: 'pre-home',
+    label: '预归位'
   });
 }
 
@@ -750,8 +814,12 @@ function executeCalibrationStep(session) {
     sessionId: session.sessionId,
     stepId: step.id,
     label: step.label,
+    anchorLabel: step.anchorLabel ?? step.label,
+    stepProfileLabel: step.stepProfileLabel ?? null,
+    stepScale: step.stepScale ?? null,
     phase: session.phase,
-    target: normalizePoint(step.target)
+    target: normalizePoint(step.target),
+    displayTarget: normalizePoint(step.displayTarget ?? step.target)
   })) {
     finalizeCalibrationSession(session.roomId, 'error', '标定 App 当前不可用');
     return;
@@ -760,11 +828,16 @@ function executeCalibrationStep(session) {
   broadcastCalibrationStatus(session, 'arming', `准备采集 ${step.label}`, {
     stepId: step.id,
     label: step.label,
+    anchorLabel: step.anchorLabel ?? step.label,
+    stepProfileLabel: step.stepProfileLabel ?? null,
+    stepScale: step.stepScale ?? null,
     phase: session.phase,
     target: normalizePoint(step.target),
+    displayTarget: normalizePoint(step.displayTarget ?? step.target),
     sampleIndex: session.currentStepIndex + 1,
     sampleCount: calibrationSampleSteps.length,
-    calibration: session.calibration
+    calibration: session.calibration,
+    note: '每次标定点击前都会先执行 HID home，再 move + click'
   });
 
   clearCalibrationTimer(session);
@@ -812,10 +885,13 @@ function startCalibrationSession(roomId, owner) {
   calibrationSessions.set(roomId, session);
   broadcastCalibrationStatus(session, 'starting', '开始 HID 点击标定', {
     sampleCount: calibrationSampleSteps.length,
+    baseAnchorCount: calibrationBaseAnchors.length,
+    stepProfiles: calibrationStepProfiles,
     verifyTarget: calibrationVerifyStep.target,
-    existingCalibration: getCalibrationSummary(room)
+    existingCalibration: getCalibrationSummary(room),
+    note: '每次标定点击前都会先执行 HID home；本轮会用小/中/大三档步幅重复采样'
   });
-  executeCalibrationStep(session);
+  dispatchCalibrationHome(session);
   return session;
 }
 
@@ -847,6 +923,22 @@ function handleCalibrationExecutorResult(roomId, message) {
   clearPendingCalibrationExecutor(session);
   if (message.status !== 'ok') {
     finalizeCalibrationSession(session.roomId, 'error', message.error || `标定动作 ${message.action} 执行失败`);
+    return true;
+  }
+
+  if (pendingCommand.phase === 'prehome' && message.action === 'home') {
+    broadcastCalibrationStatus(session, 'prepared', 'HID 已归位，开始采样', {
+      stepId: 'pre-home',
+      label: '预归位',
+      executorPayload: message.payload || null
+    });
+    clearCalibrationTimer(session);
+    session.timer = setTimeout(() => {
+      const activeSession = getCalibrationSession(session.roomId, session.sessionId);
+      if (activeSession) {
+        executeCalibrationStep(activeSession);
+      }
+    }, 250);
     return true;
   }
 
@@ -925,7 +1017,11 @@ function handleCalibrationResult(roomId, source, message) {
     session.samples.push({
       stepId: step.id,
       label: step.label,
+      anchorLabel: step.anchorLabel ?? step.label,
+      stepProfileLabel: step.stepProfileLabel ?? null,
+      stepScale: step.stepScale ?? null,
       target: normalizePoint(step.target),
+      displayTarget: normalizePoint(step.displayTarget ?? step.target),
       actual: actualPoint,
       error: errorDetail
     });
@@ -933,7 +1029,11 @@ function handleCalibrationResult(roomId, source, message) {
     broadcastCalibrationStatus(session, 'captured', `已采集 ${step.label}`, {
       stepId: step.id,
       label: step.label,
+      anchorLabel: step.anchorLabel ?? step.label,
+      stepProfileLabel: step.stepProfileLabel ?? null,
+      stepScale: step.stepScale ?? null,
       target: normalizePoint(step.target),
+      displayTarget: normalizePoint(step.displayTarget ?? step.target),
       actual: actualPoint,
       error: errorDetail,
       sampleIndex: session.currentStepIndex + 1,
