@@ -397,8 +397,8 @@ function applyCalibrationPoint(roomId, point) {
   }
 
   return normalizePoint({
-    x: normalized.x * calibration.scaleX,
-    y: normalized.y * calibration.scaleY
+    x: (normalized.x * calibration.scaleX) + (Number(calibration.offsetX) || 0),
+    y: (normalized.y * calibration.scaleY) + (Number(calibration.offsetY) || 0)
   });
 }
 
@@ -621,6 +621,62 @@ function getFrameDimension(size, key) {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
+function average(values) {
+  const validValues = values.filter((value) => Number.isFinite(value));
+  if (validValues.length === 0) {
+    return null;
+  }
+
+  const total = validValues.reduce((sum, value) => sum + value, 0);
+  return total / validValues.length;
+}
+
+function solveCalibrationLinearModel(candidates) {
+  if (!Array.isArray(candidates) || candidates.length < calibrationMinimumSuccessfulSamples) {
+    return null;
+  }
+
+  const meanDx = average(candidates.map((candidate) => candidate.dx));
+  const meanDy = average(candidates.map((candidate) => candidate.dy));
+  const meanX = average(candidates.map((candidate) => candidate.centerPx?.x));
+  const meanY = average(candidates.map((candidate) => candidate.centerPx?.y));
+  if (!Number.isFinite(meanDx) || !Number.isFinite(meanDy) || !Number.isFinite(meanX) || !Number.isFinite(meanY)) {
+    return null;
+  }
+
+  let numerator = 0;
+  let denominator = 0;
+  for (const candidate of candidates) {
+    const centeredDx = candidate.dx - meanDx;
+    const centeredDy = candidate.dy - meanDy;
+    const centeredX = candidate.centerPx.x - meanX;
+    const centeredY = candidate.centerPx.y - meanY;
+    numerator += (centeredDx * centeredX) + (centeredDy * centeredY);
+    denominator += (centeredDx ** 2) + (centeredDy ** 2);
+  }
+
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+    return null;
+  }
+
+  const k = numerator / denominator;
+  if (!Number.isFinite(k) || k <= 0) {
+    return null;
+  }
+
+  const originX = meanX - (k * meanDx);
+  const originY = meanY - (k * meanDy);
+  if (!Number.isFinite(originX) || !Number.isFinite(originY)) {
+    return null;
+  }
+
+  return {
+    k,
+    originX,
+    originY
+  };
+}
+
 function buildRoomCalibrationFromColorFrame(samples, frameResult) {
   const sourceFrameSize = frameResult.sourceFrameSize || frameResult.imageSize || {};
   const frameWidth = getFrameDimension(sourceFrameSize, 'width');
@@ -657,8 +713,7 @@ function buildRoomCalibrationFromColorFrame(samples, frameResult) {
     candidates.push({
       ...sample,
       detection,
-      centerPx: { x: centerX, y: centerY },
-      k: ((centerX * dx) + (centerY * dy)) / denominator
+      centerPx: { x: centerX, y: centerY }
     });
   }
 
@@ -666,22 +721,23 @@ function buildRoomCalibrationFromColorFrame(samples, frameResult) {
     throw makeStatusError('截图中可用彩色点太少，无法计算 HID move k', 500);
   }
 
-  const initialK = median(candidates.map((candidate) => candidate.k));
-  if (!Number.isFinite(initialK) || initialK <= 0) {
+  const initialModel = solveCalibrationLinearModel(candidates);
+  if (!initialModel) {
     throw makeStatusError('HID move k 计算结果无效', 500);
   }
 
   const residuals = candidates.map((candidate) => {
-    const predictedX = initialK * candidate.dx;
-    const predictedY = initialK * candidate.dy;
+    const predictedX = initialModel.originX + (initialModel.k * candidate.dx);
+    const predictedY = initialModel.originY + (initialModel.k * candidate.dy);
     return Math.sqrt((candidate.centerPx.x - predictedX) ** 2 + (candidate.centerPx.y - predictedY) ** 2);
   });
   const residualMedian = median(residuals) ?? 0;
   const residualThreshold = Math.max(calibrationResidualFloorPixels, residualMedian * 2.5);
   const inliers = candidates.filter((_candidate, index) => residuals[index] <= residualThreshold);
   const finalCandidates = inliers.length >= calibrationMinimumSuccessfulSamples ? inliers : candidates;
-  const kPixelsPerHidUnit = median(finalCandidates.map((candidate) => candidate.k));
-  if (!Number.isFinite(kPixelsPerHidUnit) || kPixelsPerHidUnit <= 0) {
+  const finalModel = solveCalibrationLinearModel(finalCandidates);
+  const kPixelsPerHidUnit = finalModel?.k;
+  if (!Number.isFinite(kPixelsPerHidUnit) || kPixelsPerHidUnit <= 0 || !finalModel) {
     throw makeStatusError('HID move k 计算结果无效', 500);
   }
 
@@ -693,33 +749,54 @@ function buildRoomCalibrationFromColorFrame(samples, frameResult) {
     throw makeStatusError('Executor 未返回 screenWidth/screenHeight，无法派生自动化 scale', 500);
   }
 
+  const scaleX = frameWidth / (kPixelsPerHidUnit * executorScreenWidth);
+  const scaleY = frameHeight / (kPixelsPerHidUnit * executorScreenHeight);
+  const offsetX = -finalModel.originX / (kPixelsPerHidUnit * executorScreenWidth);
+  const offsetY = -finalModel.originY / (kPixelsPerHidUnit * executorScreenHeight);
+
   return {
-    scaleX: frameWidth / (kPixelsPerHidUnit * executorScreenWidth),
-    offsetX: 0,
-    scaleY: frameHeight / (kPixelsPerHidUnit * executorScreenHeight),
-    offsetY: 0,
+    scaleX,
+    offsetX,
+    scaleY,
+    offsetY,
     kPixelsPerHidUnit,
+    originPx: {
+      x: finalModel.originX,
+      y: finalModel.originY
+    },
     sourceFrameSize: { width: frameWidth, height: frameHeight },
     imageSize: frameResult.imageSize || null,
     executorScreenSize: { width: executorScreenWidth, height: executorScreenHeight },
     sampleCount: finalCandidates.length,
     totalDetectedCount: detections.length,
     consensus: {
+      originX: finalModel.originX,
+      originY: finalModel.originY,
       inlierCount: finalCandidates.length,
       totalCandidateCount: candidates.length,
       residualMedian,
       residualThreshold
     },
-    samples: finalCandidates.map((candidate) => ({
-      stepId: candidate.stepId,
-      label: candidate.label,
-      dx: candidate.dx,
-      dy: candidate.dy,
-      color: candidate.color,
-      centerPx: candidate.centerPx,
-      area: candidate.detection?.area ?? null,
-      k: candidate.k
-    }))
+    samples: finalCandidates.map((candidate) => {
+      const predictedCenterPx = {
+        x: finalModel.originX + (kPixelsPerHidUnit * candidate.dx),
+        y: finalModel.originY + (kPixelsPerHidUnit * candidate.dy)
+      };
+      return {
+        stepId: candidate.stepId,
+        label: candidate.label,
+        dx: candidate.dx,
+        dy: candidate.dy,
+        color: candidate.color,
+        centerPx: candidate.centerPx,
+        predictedCenterPx,
+        residualPx: Math.sqrt(
+          ((candidate.centerPx.x - predictedCenterPx.x) ** 2) +
+          ((candidate.centerPx.y - predictedCenterPx.y) ** 2)
+        ),
+        area: candidate.detection?.area ?? null
+      };
+    })
   };
 }
 
