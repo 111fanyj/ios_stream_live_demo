@@ -720,47 +720,14 @@ private struct CalibrationSurfaceView: View {
 
     @ViewBuilder
     private func calibrationMarker(title: String, point: CalibrationPoint, color: Color, size: CGSize) -> some View {
-        let markerSize: CGFloat = showChrome ? 22 : 18
+        let markerSize: CGFloat = showChrome ? 8 : 6
         let centerX = max(0, min(size.width, CGFloat(point.x) * size.width))
         let centerY = max(0, min(size.height, CGFloat(point.y) * size.height))
 
-        Group {
-            if showMarkerLabels {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.caption2)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.ultraThinMaterial, in: Capsule())
-
-                    Circle()
-                        .fill(color)
-                        .frame(width: markerSize, height: markerSize)
-                        .overlay {
-                            Circle()
-                                .stroke(Color.white, lineWidth: 2)
-                        }
-                }
-            } else {
-                ZStack {
-                    Circle()
-                        .stroke(color.opacity(0.95), lineWidth: 3)
-                        .frame(width: markerSize, height: markerSize)
-
-                    Circle()
-                        .fill(color.opacity(0.9))
-                        .frame(width: 6, height: 6)
-
-                    Rectangle()
-                        .fill(color.opacity(0.75))
-                        .frame(width: 1, height: 26)
-
-                    Rectangle()
-                        .fill(color.opacity(0.75))
-                        .frame(width: 26, height: 1)
-                }
-            }
-        }
+        Circle()
+            .fill(color)
+            .frame(width: markerSize, height: markerSize)
+            .accessibilityLabel(title)
         .position(x: centerX, y: centerY)
     }
 

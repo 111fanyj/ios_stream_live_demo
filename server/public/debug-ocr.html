@@ -184,6 +184,77 @@
         white-space: pre-wrap;
       }
 
+      .calibration-reference {
+        display: grid;
+        gap: 10px;
+      }
+
+      .calibration-reference[hidden] {
+        display: none;
+      }
+
+      .reference-title {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: baseline;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .reference-title strong {
+        color: var(--ink);
+        font-size: 15px;
+      }
+
+      .reference-frame {
+        position: relative;
+        overflow: hidden;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(rgba(31, 41, 51, 0.08) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(31, 41, 51, 0.08) 1px, transparent 1px),
+          #fffaf0;
+        background-size: 10% 10%;
+        aspect-ratio: 9 / 16;
+      }
+
+      .reference-overlay {
+        position: absolute;
+        inset: 0;
+      }
+
+      .reference-image {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: fill;
+      }
+
+      .reference-point {
+        position: absolute;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+      }
+
+      .reference-label {
+        position: absolute;
+        transform: translate(6px, -50%);
+        max-width: 180px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        background: rgba(31, 41, 51, 0.82);
+        color: #fff;
+        font-family: "SFMono-Regular", Menlo, monospace;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
       .result {
         padding: 18px;
         display: grid;
@@ -375,6 +446,17 @@
 
           <div id="calibrationSummary" class="console">等待开始标定...</div>
 
+          <div id="calibrationReference" class="calibration-reference" hidden>
+            <div class="reference-title">
+              <strong>标定点截图参考图</strong>
+              <span id="calibrationReferenceMeta">等待截图分析结果</span>
+            </div>
+            <div id="calibrationReferenceFrame" class="reference-frame">
+              <img id="calibrationReferenceImage" class="reference-image" alt="标定参考帧" hidden />
+              <div id="calibrationReferenceOverlay" class="reference-overlay"></div>
+            </div>
+          </div>
+
           <div id="console" class="console"></div>
         </section>
 
@@ -444,6 +526,11 @@
       const requestStatus = document.getElementById('requestStatus');
       const calibrationStatus = document.getElementById('calibrationStatus');
       const calibrationSummary = document.getElementById('calibrationSummary');
+      const calibrationReference = document.getElementById('calibrationReference');
+      const calibrationReferenceFrame = document.getElementById('calibrationReferenceFrame');
+      const calibrationReferenceImage = document.getElementById('calibrationReferenceImage');
+      const calibrationReferenceOverlay = document.getElementById('calibrationReferenceOverlay');
+      const calibrationReferenceMeta = document.getElementById('calibrationReferenceMeta');
       const consoleView = document.getElementById('console');
       const frameEmpty = document.getElementById('frameEmpty');
       const frameImage = document.getElementById('frameImage');
@@ -496,6 +583,93 @@
           ? 'null'
           : JSON.stringify(message.calibration, null, 2);
         calibrationSummary.textContent = `status: ${message.status || 'unknown'}\nmessage: ${message.message || ''}\n\ndetail:\n${detail}\n\ncalibration:\n${calibration}`;
+        renderCalibrationReference(message);
+      }
+
+      function calibrationFrameSize(message) {
+        const detail = message.detail || {};
+        return detail.frame?.sourceFrameSize ||
+          detail.frame?.imageSize ||
+          detail.calibration?.sourceFrameSize ||
+          message.calibration?.sourceFrameSize ||
+          null;
+      }
+
+      function calibrationReferencePoints(message) {
+        const detail = message.detail || {};
+        const detections = Array.isArray(detail.frame?.detections) ? detail.frame.detections : [];
+        if (detections.length > 0) {
+          return detections
+            .filter((detection) => detection?.centerPx)
+            .map((detection) => ({
+              label: detection.label || detection.stepId || 'point',
+              color: detection.color || '#34c759',
+              centerPx: detection.centerPx,
+              area: detection.area
+            }));
+        }
+
+        const samples = Array.isArray(detail.calibration?.samples) ? detail.calibration.samples : [];
+        return samples
+          .filter((sample) => sample?.centerPx)
+          .map((sample) => ({
+            label: sample.label || sample.stepId || 'point',
+            color: sample.color || '#34c759',
+            centerPx: sample.centerPx,
+            area: sample.area
+          }));
+      }
+
+      function renderCalibrationReference(message) {
+        const size = calibrationFrameSize(message);
+        const width = Number(size?.width);
+        const height = Number(size?.height);
+        const points = calibrationReferencePoints(message);
+        calibrationReferenceOverlay.innerHTML = '';
+
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0 || points.length === 0) {
+          calibrationReference.hidden = true;
+          return;
+        }
+
+        calibrationReference.hidden = false;
+        calibrationReferenceFrame.style.aspectRatio = `${width} / ${height}`;
+        calibrationReferenceMeta.textContent = `${Math.round(width)} x ${Math.round(height)} px · ${points.length} 点`;
+        const canReuseFrameImage = frameImage.src &&
+          !frameImage.hidden &&
+          Math.abs(Number(frameImage.naturalWidth) - width) <= 2 &&
+          Math.abs(Number(frameImage.naturalHeight) - height) <= 2;
+        calibrationReferenceImage.hidden = !canReuseFrameImage;
+        if (canReuseFrameImage) {
+          calibrationReferenceImage.src = frameImage.src;
+        } else {
+          calibrationReferenceImage.removeAttribute('src');
+        }
+
+        for (const point of points) {
+          const x = Number(point.centerPx?.x);
+          const y = Number(point.centerPx?.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            continue;
+          }
+
+          const left = Math.max(0, Math.min(100, (x / width) * 100));
+          const top = Math.max(0, Math.min(100, (y / height) * 100));
+
+          const dot = document.createElement('div');
+          dot.className = 'reference-point';
+          dot.style.left = `${left}%`;
+          dot.style.top = `${top}%`;
+          dot.style.background = point.color;
+
+          const label = document.createElement('div');
+          label.className = 'reference-label';
+          label.style.left = `${left}%`;
+          label.style.top = `${top}%`;
+          label.textContent = `${point.label} (${Math.round(x)}, ${Math.round(y)})`;
+
+          calibrationReferenceOverlay.append(dot, label);
+        }
       }
 
       function clearPendingRequestTimer() {
