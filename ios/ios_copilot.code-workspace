@@ -1,0 +1,10 @@
+{
+    "folders": [
+        {
+            "path": "../../esp32_c3_cancanok"
+        },
+        {
+            "path": ".."
+        }
+    ]
+}
