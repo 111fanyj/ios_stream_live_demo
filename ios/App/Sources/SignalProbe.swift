@@ -12,6 +12,16 @@ struct CalibrationCommandState: Equatable {
     let label: String
     let phase: String
     let target: CalibrationPoint
+    let colorHex: String
+    let rawMoveDX: Int?
+    let rawMoveDY: Int?
+}
+
+struct CalibrationTapMarker: Equatable {
+    let stepID: String
+    let label: String
+    let point: CalibrationPoint
+    let colorHex: String
 }
 
 @MainActor
@@ -32,6 +42,7 @@ final class SignalProbe {
     private(set) var isCalibrationTapArmed = false
     private(set) var isCalibrationSessionActive = false
     private(set) var lastCalibrationTap: CalibrationPoint?
+    private(set) var calibrationTapMarkers: [CalibrationTapMarker] = []
     private(set) var calibrationResultSummary = "暂无标定结果"
 
     var isConnectedOrConnecting: Bool {
@@ -105,6 +116,8 @@ final class SignalProbe {
         calibrationCommand = nil
         isCalibrationTapArmed = false
         isCalibrationSessionActive = false
+        lastCalibrationTap = nil
+        calibrationTapMarkers.removeAll()
 
         if state != .idle {
             state = .disconnected
@@ -119,6 +132,7 @@ final class SignalProbe {
         calibrationCommand = nil
         isCalibrationTapArmed = false
         lastCalibrationTap = nil
+        calibrationTapMarkers.removeAll()
         calibrationStatus = isCalibrationSessionActive
             ? "标定进行中"
             : (state == .connected ? "标定通道已连接" : "标定通道未激活")
@@ -163,6 +177,12 @@ final class SignalProbe {
                 }
 
                 self.lastCalibrationTap = point
+                self.calibrationTapMarkers.append(CalibrationTapMarker(
+                    stepID: command.stepID,
+                    label: command.label,
+                    point: point,
+                    colorHex: command.colorHex
+                ))
                 self.isCalibrationTapArmed = false
                 self.calibrationStatus = "已上报 \(command.label) 点击: (\(format(point.x)), \(format(point.y)))"
                 self.calibrationResultSummary = self.calibrationStatus
@@ -352,7 +372,10 @@ final class SignalProbe {
                 stepID: stepID,
                 label: label,
                 phase: phase,
-                target: target
+                target: target,
+                colorHex: json["color"] as? String ?? "#34c759",
+                rawMoveDX: json["dx"] as? Int ?? (json["dx"] as? NSNumber)?.intValue,
+                rawMoveDY: json["dy"] as? Int ?? (json["dy"] as? NSNumber)?.intValue
             )
             isCalibrationSessionActive = true
             isCalibrationTapArmed = true
@@ -375,7 +398,12 @@ final class SignalProbe {
         let message = json["message"] as? String ?? ""
         calibrationStatus = message.isEmpty ? status : "\(status): \(message)"
 
-        if ["starting", "arming", "dispatching", "awaiting_tap", "captured", "solved"].contains(status) {
+        if status == "starting" {
+            calibrationTapMarkers.removeAll()
+            lastCalibrationTap = nil
+        }
+
+        if ["starting", "prepared", "arming", "dispatching", "awaiting_tap", "captured", "analyzing", "solved"].contains(status) {
             isCalibrationSessionActive = true
         }
 

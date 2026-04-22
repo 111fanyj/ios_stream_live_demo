@@ -42,6 +42,15 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         let error: String?
     }
 
+    private struct CalibrationExpectedColor {
+        let stepID: String
+        let label: String
+        let colorHex: String
+        let red: Int
+        let green: Int
+        let blue: Int
+    }
+
     private let logger = Logger(subsystem: "IOSStreamViewer", category: "BroadcastUploadExtension")
     private var webSocketSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
@@ -673,6 +682,46 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         }
     }
 
+    private func sendCalibrationColorFrameResult(
+        sessionID: String,
+        requestID: String,
+        status: String,
+        payload: [String: Any]? = nil,
+        error: String? = nil
+    ) {
+        guard let task = webSocketTask else {
+            logEvent("彩色标定帧结果发送前置条件不满足")
+            return
+        }
+
+        var message: [String: Any] = [
+            "type": "calibration_color_frame_result",
+            "sessionId": sessionID,
+            "requestId": requestID,
+            "status": status
+        ]
+        if let payload {
+            message["payload"] = payload
+        }
+        if let error {
+            message["error"] = error
+        }
+
+        guard let json = makeJSONString(from: message) else {
+            logEvent("彩色标定帧结果序列化失败")
+            return
+        }
+
+        task.send(.string(json)) { [weak self] sendError in
+            if let sendError {
+                self?.logEvent("彩色标定帧结果发送失败: \(sendError.localizedDescription)")
+                return
+            }
+
+            self?.logEvent("已发送彩色标定帧结果: \(requestID) / \(status)")
+        }
+    }
+
     private func handleDebugFrameRequestMessage(_ json: [String: Any]) {
         guard let requestID = json["requestId"] as? String, !requestID.isEmpty else {
             return
@@ -707,6 +756,50 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         logEvent("收到调试帧请求: \(requestID) query=\(query.isEmpty ? "<empty>" : query)")
         sendDebugFrameResult(requestID: requestID, status: "ok", payload: payload)
+    }
+
+    private func handleCalibrationColorFrameRequestMessage(_ json: [String: Any]) {
+        guard let sessionID = json["sessionId"] as? String,
+              let requestID = json["requestId"] as? String,
+              !sessionID.isEmpty,
+              !requestID.isEmpty
+        else {
+            return
+        }
+
+        guard let pixelBuffer = automationCommandQueue.sync(execute: { latestVideoPixelBuffer }) else {
+            sendCalibrationColorFrameResult(
+                sessionID: sessionID,
+                requestID: requestID,
+                status: "error",
+                error: "当前还没有可用的 ReplayKit 视频帧"
+            )
+            return
+        }
+
+        let expectedColors = decodeCalibrationExpectedColors(json["expectedColors"] as? [[String: Any]] ?? [])
+        guard !expectedColors.isEmpty else {
+            sendCalibrationColorFrameResult(
+                sessionID: sessionID,
+                requestID: requestID,
+                status: "error",
+                error: "彩色标定请求缺少 expectedColors"
+            )
+            return
+        }
+
+        guard let payload = makeCalibrationColorFramePayload(pixelBuffer: pixelBuffer, expectedColors: expectedColors) else {
+            sendCalibrationColorFrameResult(
+                sessionID: sessionID,
+                requestID: requestID,
+                status: "error",
+                error: "彩色标定帧分析失败"
+            )
+            return
+        }
+
+        logEvent("收到彩色标定帧请求: \(requestID) colors=\(expectedColors.count)")
+        sendCalibrationColorFrameResult(sessionID: sessionID, requestID: requestID, status: "ok", payload: payload)
     }
 
     private func makeDebugFrameImagePayload(pixelBuffer: CVPixelBuffer) -> [String: Any]? {
@@ -753,6 +846,134 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             logger.error("Failed to encode debug frame image: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+
+    private func decodeCalibrationExpectedColors(_ values: [[String: Any]]) -> [CalibrationExpectedColor] {
+        values.compactMap { value in
+            guard let stepID = value["stepId"] as? String,
+                  let colorHex = value["color"] as? String,
+                  let rgb = parseHexColor(colorHex)
+            else {
+                return nil
+            }
+
+            return CalibrationExpectedColor(
+                stepID: stepID,
+                label: value["label"] as? String ?? stepID,
+                colorHex: colorHex,
+                red: rgb.red,
+                green: rgb.green,
+                blue: rgb.blue
+            )
+        }
+    }
+
+    private func parseHexColor(_ hex: String) -> (red: Int, green: Int, blue: Int)? {
+        var value = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasPrefix("#") {
+            value.removeFirst()
+        }
+
+        guard value.count == 6, let rgb = Int(value, radix: 16) else {
+            return nil
+        }
+
+        return (red: (rgb >> 16) & 0xff, green: (rgb >> 8) & 0xff, blue: rgb & 0xff)
+    }
+
+    private func makeCalibrationColorFramePayload(
+        pixelBuffer: CVPixelBuffer,
+        expectedColors: [CalibrationExpectedColor]
+    ) -> [String: Any]? {
+        let width = max(1, CVPixelBufferGetWidth(pixelBuffer))
+        let height = max(1, CVPixelBufferGetHeight(pixelBuffer))
+        let bytesPerPixel = 4
+        var bytes = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+
+        bytes.withUnsafeMutableBytes { buffer in
+            replayFrameSnapshotContext.render(
+                image,
+                toBitmap: buffer.baseAddress!,
+                rowBytes: width * bytesPerPixel,
+                bounds: CGRect(x: 0, y: 0, width: width, height: height),
+                format: .RGBA8,
+                colorSpace: colorSpace
+            )
+        }
+
+        let thresholdSquared = 48 * 48
+        let minimumArea = 12
+        var detections: [[String: Any]] = []
+
+        for expected in expectedColors {
+            var count = 0
+            var sumX = 0
+            var sumY = 0
+            var minX = width
+            var minY = height
+            var maxX = 0
+            var maxY = 0
+
+            for y in 0..<height {
+                let rowStart = y * width * bytesPerPixel
+                for x in 0..<width {
+                    let offset = rowStart + x * bytesPerPixel
+                    let red = Int(bytes[offset])
+                    let green = Int(bytes[offset + 1])
+                    let blue = Int(bytes[offset + 2])
+                    let distanceSquared = (red - expected.red) * (red - expected.red) +
+                        (green - expected.green) * (green - expected.green) +
+                        (blue - expected.blue) * (blue - expected.blue)
+                    if distanceSquared > thresholdSquared {
+                        continue
+                    }
+
+                    count += 1
+                    sumX += x
+                    sumY += y
+                    minX = min(minX, x)
+                    minY = min(minY, y)
+                    maxX = max(maxX, x)
+                    maxY = max(maxY, y)
+                }
+            }
+
+            guard count >= minimumArea else {
+                continue
+            }
+
+            detections.append([
+                "stepId": expected.stepID,
+                "label": expected.label,
+                "color": expected.colorHex,
+                "centerPx": [
+                    "x": Double(sumX) / Double(count),
+                    "y": Double(sumY) / Double(count)
+                ],
+                "area": count,
+                "bounds": [
+                    "x": minX,
+                    "y": minY,
+                    "width": max(1, maxX - minX + 1),
+                    "height": max(1, maxY - minY + 1)
+                ]
+            ])
+        }
+
+        return [
+            "imageSize": [
+                "width": width,
+                "height": height
+            ],
+            "sourceFrameSize": [
+                "width": width,
+                "height": height
+            ],
+            "detections": detections,
+            "capturedAt": isoFormatter.string(from: Date())
+        ]
     }
 
     private func decodeAutomationStep(from value: Any) throws -> AutomationStep {
@@ -1250,6 +1471,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             handleAutomationCommandMessage(json)
         case "debug_frame_request":
             handleDebugFrameRequestMessage(json)
+        case "calibration_color_frame_request":
+            handleCalibrationColorFrameRequestMessage(json)
         case "error":
             let errorMessage = json["message"] as? String ?? "未知错误"
             updateDiagnostics(status: "服务端返回错误", error: errorMessage)

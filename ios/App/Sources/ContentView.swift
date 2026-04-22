@@ -362,6 +362,7 @@ struct ContentView: View {
                         CalibrationSurfaceView(
                             activeCommand: signalProbe.calibrationCommand,
                             lastTap: signalProbe.lastCalibrationTap,
+                            tapMarkers: signalProbe.calibrationTapMarkers,
                             isArmed: signalProbe.isCalibrationTapArmed
                         ) { point in
                             signalProbe.reportCalibrationTap(point)
@@ -608,6 +609,7 @@ struct ContentView: View {
 private struct CalibrationSurfaceView: View {
     let activeCommand: CalibrationCommandState?
     let lastTap: CalibrationPoint?
+    let tapMarkers: [CalibrationTapMarker]
     let isArmed: Bool
     let surfaceHeight: CGFloat
     let showOverlayText: Bool
@@ -618,6 +620,7 @@ private struct CalibrationSurfaceView: View {
     init(
         activeCommand: CalibrationCommandState?,
         lastTap: CalibrationPoint?,
+        tapMarkers: [CalibrationTapMarker] = [],
         isArmed: Bool,
         surfaceHeight: CGFloat = 320,
         showOverlayText: Bool = true,
@@ -627,6 +630,7 @@ private struct CalibrationSurfaceView: View {
     ) {
         self.activeCommand = activeCommand
         self.lastTap = lastTap
+        self.tapMarkers = tapMarkers
         self.isArmed = isArmed
         self.surfaceHeight = surfaceHeight
         self.showOverlayText = showOverlayText
@@ -666,16 +670,25 @@ private struct CalibrationSurfaceView: View {
                     .padding(16)
                 }
 
-                if let command = activeCommand {
+                if isArmed, let command = activeCommand {
                     calibrationMarker(
                         title: command.label,
                         point: command.target,
-                        color: .orange,
+                        color: color(from: command.colorHex, fallback: .orange),
                         size: size
                     )
                 }
 
-                if let lastTap {
+                ForEach(tapMarkers, id: \.stepID) { marker in
+                    calibrationMarker(
+                        title: marker.label,
+                        point: marker.point,
+                        color: color(from: marker.colorHex, fallback: .green),
+                        size: size
+                    )
+                }
+
+                if tapMarkers.isEmpty, let lastTap {
                     calibrationMarker(
                         title: "实际点击",
                         point: lastTap,
@@ -750,6 +763,23 @@ private struct CalibrationSurfaceView: View {
         }
         .position(x: centerX, y: centerY)
     }
+
+    private func color(from hex: String, fallback: Color) -> Color {
+        var value = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasPrefix("#") {
+            value.removeFirst()
+        }
+
+        guard value.count == 6, let rgb = Int(value, radix: 16) else {
+            return fallback
+        }
+
+        return Color(
+            red: Double((rgb >> 16) & 0xff) / 255.0,
+            green: Double((rgb >> 8) & 0xff) / 255.0,
+            blue: Double(rgb & 0xff) / 255.0
+        )
+    }
 }
 
 private struct CalibrationFullscreenView: View {
@@ -760,6 +790,7 @@ private struct CalibrationFullscreenView: View {
             CalibrationSurfaceView(
                 activeCommand: signalProbe.calibrationCommand,
                 lastTap: signalProbe.lastCalibrationTap,
+                tapMarkers: signalProbe.calibrationTapMarkers,
                 isArmed: signalProbe.isCalibrationTapArmed,
                 surfaceHeight: geometry.size.height,
                 showOverlayText: false,
