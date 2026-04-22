@@ -51,6 +51,16 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         let blue: Int
     }
 
+    private struct CalibrationColorBlob {
+        let count: Int
+        let sumX: Int
+        let sumY: Int
+        let minX: Int
+        let minY: Int
+        let maxX: Int
+        let maxY: Int
+    }
+
     private let logger = Logger(subsystem: "IOSStreamViewer", category: "BroadcastUploadExtension")
     private var webSocketSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
@@ -903,44 +913,18 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             )
         }
 
-        let thresholdSquared = 48 * 48
         let minimumArea = 12
         var detections: [[String: Any]] = []
 
         for expected in expectedColors {
-            var count = 0
-            var sumX = 0
-            var sumY = 0
-            var minX = width
-            var minY = height
-            var maxX = 0
-            var maxY = 0
-
-            for y in 0..<height {
-                let rowStart = y * width * bytesPerPixel
-                for x in 0..<width {
-                    let offset = rowStart + x * bytesPerPixel
-                    let red = Int(bytes[offset])
-                    let green = Int(bytes[offset + 1])
-                    let blue = Int(bytes[offset + 2])
-                    let distanceSquared = (red - expected.red) * (red - expected.red) +
-                        (green - expected.green) * (green - expected.green) +
-                        (blue - expected.blue) * (blue - expected.blue)
-                    if distanceSquared > thresholdSquared {
-                        continue
-                    }
-
-                    count += 1
-                    sumX += x
-                    sumY += y
-                    minX = min(minX, x)
-                    minY = min(minY, y)
-                    maxX = max(maxX, x)
-                    maxY = max(maxY, y)
-                }
-            }
-
-            guard count >= minimumArea else {
+            guard let blob = largestCalibrationColorBlob(
+                in: bytes,
+                width: width,
+                height: height,
+                bytesPerPixel: bytesPerPixel,
+                expected: expected,
+                minimumArea: minimumArea
+            ) else {
                 continue
             }
 
@@ -949,15 +933,15 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 "label": expected.label,
                 "color": expected.colorHex,
                 "centerPx": [
-                    "x": Double(sumX) / Double(count),
-                    "y": Double(sumY) / Double(count)
+                    "x": Double(blob.sumX) / Double(blob.count),
+                    "y": Double(blob.sumY) / Double(blob.count)
                 ],
-                "area": count,
+                "area": blob.count,
                 "bounds": [
-                    "x": minX,
-                    "y": minY,
-                    "width": max(1, maxX - minX + 1),
-                    "height": max(1, maxY - minY + 1)
+                    "x": blob.minX,
+                    "y": blob.minY,
+                    "width": max(1, blob.maxX - blob.minX + 1),
+                    "height": max(1, blob.maxY - blob.minY + 1)
                 ]
             ])
         }
@@ -974,6 +958,115 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             "detections": detections,
             "capturedAt": isoFormatter.string(from: Date())
         ]
+    }
+
+    private func largestCalibrationColorBlob(
+        in bytes: [UInt8],
+        width: Int,
+        height: Int,
+        bytesPerPixel: Int,
+        expected: CalibrationExpectedColor,
+        minimumArea: Int
+    ) -> CalibrationColorBlob? {
+        let pixelCount = width * height
+        var matching = [Bool](repeating: false, count: pixelCount)
+        var visited = [Bool](repeating: false, count: pixelCount)
+
+        for y in 0..<height {
+            let rowStart = y * width
+            let byteRowStart = y * width * bytesPerPixel
+            for x in 0..<width {
+                let offset = byteRowStart + x * bytesPerPixel
+                matching[rowStart + x] = Int(bytes[offset]) == expected.red &&
+                    Int(bytes[offset + 1]) == expected.green &&
+                    Int(bytes[offset + 2]) == expected.blue
+            }
+        }
+
+        var bestBlob: CalibrationColorBlob?
+        var queue = [Int]()
+        queue.reserveCapacity(256)
+
+        for index in 0..<pixelCount {
+            guard matching[index], !visited[index] else {
+                continue
+            }
+
+            visited[index] = true
+            queue.removeAll(keepingCapacity: true)
+            queue.append(index)
+
+            var cursor = 0
+            var count = 0
+            var sumX = 0
+            var sumY = 0
+            var minX = width
+            var minY = height
+            var maxX = 0
+            var maxY = 0
+
+            while cursor < queue.count {
+                let current = queue[cursor]
+                cursor += 1
+
+                let x = current % width
+                let y = current / width
+                count += 1
+                sumX += x
+                sumY += y
+                minX = min(minX, x)
+                minY = min(minY, y)
+                maxX = max(maxX, x)
+                maxY = max(maxY, y)
+
+                if x > 0 {
+                    enqueueCalibrationNeighbor(current - 1, matching: matching, visited: &visited, queue: &queue)
+                }
+                if x + 1 < width {
+                    enqueueCalibrationNeighbor(current + 1, matching: matching, visited: &visited, queue: &queue)
+                }
+                if y > 0 {
+                    enqueueCalibrationNeighbor(current - width, matching: matching, visited: &visited, queue: &queue)
+                }
+                if y + 1 < height {
+                    enqueueCalibrationNeighbor(current + width, matching: matching, visited: &visited, queue: &queue)
+                }
+            }
+
+            guard count >= minimumArea else {
+                continue
+            }
+
+            let blob = CalibrationColorBlob(
+                count: count,
+                sumX: sumX,
+                sumY: sumY,
+                minX: minX,
+                minY: minY,
+                maxX: maxX,
+                maxY: maxY
+            )
+
+            if bestBlob == nil || count > bestBlob!.count {
+                bestBlob = blob
+            }
+        }
+
+        return bestBlob
+    }
+
+    private func enqueueCalibrationNeighbor(
+        _ index: Int,
+        matching: [Bool],
+        visited: inout [Bool],
+        queue: inout [Int]
+    ) {
+        guard matching[index], !visited[index] else {
+            return
+        }
+
+        visited[index] = true
+        queue.append(index)
     }
 
     private func decodeAutomationStep(from value: Any) throws -> AutomationStep {
