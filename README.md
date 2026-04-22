@@ -88,6 +88,7 @@ open IOSStreamViewer.xcodeproj
 	- 服务端根据返回的基础数据完成匹配、变量保存、步骤推进和超时控制。
 7. 对 `tap`、`drag` 这类交互命令，服务端现在会把动作转发给独立的 `executor` 客户端；推荐用 `esp32_c3_gpt5.4/tools/hid_room_bridge.py` 通过 USB 串口控制 ESP32，再由 ESP32 作为 BLE HID 真实操作 iPhone。
 8. 服务端只有在收到 `executor_result=ok` 之后才会推进到下一步，从而形成“动作执行 -> 屏幕观察 -> 结果确认”的闭环。
+9. executor 的鼠标路径现在统一为“`home` -> 按 calibration 固定右下参考点预偏移 -> 剩余位移”，这样标定、验证和真实自动化动作都从同一个起点模型出发。
 
 ## 6. 当前实现说明
 

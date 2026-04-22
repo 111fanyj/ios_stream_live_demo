@@ -19,38 +19,35 @@ let nextClientId = 1;
 let nextAutomationSequence = 1;
 
 const defaultCalibration = Object.freeze({
-  scaleX: 0.26233594111346115,
-  scaleY: 0.260289536357444,
-  offsetX: 0,
-  offsetY: 0
+  scaleX: 0.3199989808997008,
+  scaleY: 0.22284761183944202,
+  offsetX: -0.011906938824174913,
+  offsetY: 0.016607512881589015
 });
-const defaultCalibrationUpdatedAt = '2026-04-22T03:34:21.344Z';
+const defaultCalibrationUpdatedAt = '2026-04-22T04:56:54.644Z';
+
+const homeSettleReferenceTarget = Object.freeze({ x: 0.12, y: 0.12 });
 
 const calibrationBaseAnchors = [
   { id: 'sample-top-left', label: '左上锚点', target: { x: 0.18, y: 0.18 } },
   { id: 'sample-top-right', label: '右上锚点', target: { x: 0.62, y: 0.28 } },
 ];
 
-const calibrationStepProfiles = [
-  { id: 'micro', label: '超小步幅', scale: 0.4 },
-  { id: 'tiny', label: '更小步幅', scale: 0.5 },
-];
-
-const calibrationSampleSteps = calibrationBaseAnchors.flatMap((anchor) => calibrationStepProfiles.map((profile) => ({
-  id: `${anchor.id}-${profile.id}`,
-  label: `${anchor.label} · ${profile.label}`,
+const calibrationSampleSteps = calibrationBaseAnchors.map((anchor) => ({
+  id: anchor.id,
+  label: anchor.label,
   anchorLabel: anchor.label,
-  stepProfileLabel: profile.label,
-  stepScale: profile.scale,
-  target: {
-    x: anchor.target.x * profile.scale,
-    y: anchor.target.y * profile.scale
-  },
-  displayTarget: {
-    x: anchor.target.x * profile.scale,
-    y: anchor.target.y * profile.scale
-  }
-})));
+  target: anchor.target,
+  displayTarget: anchor.target
+}));
+
+const calibrationHomeStep = {
+  id: 'sample-home-reference',
+  label: 'Home 右下固定参考点',
+  anchorLabel: 'Home 右下固定参考点',
+  target: homeSettleReferenceTarget,
+  displayTarget: homeSettleReferenceTarget
+};
 
 const calibrationVerifyStep = {
   id: 'verify-mid-left',
@@ -60,10 +57,11 @@ const calibrationVerifyStep = {
 
 const calibrationVerificationThreshold = 0.035;
 const calibrationCaptureTimeoutMs = 6_000;
-const calibrationRetryBackoffFactor = 0.5;
+const calibrationRetryBackoffFactor = 0.8;
 const calibrationMaxTapAttempts = 5;
-const calibrationMinimumSuccessfulSamples = 3;
+const calibrationMinimumSuccessfulSamples = 2;
 const calibrationConsensusResidualFloor = 0.012;
+const calibrationPairRatioTolerance = 0.12;
 
 function log(...parts) {
   console.log(new Date().toISOString(), ...parts);
@@ -409,21 +407,41 @@ function resolveAutomationTarget(session, target) {
   return normalizePoint(target);
 }
 
-function applyCalibrationPoint(roomId, point) {
+function applyCalibrationToPoint(point, calibration) {
   const normalized = normalizePoint(point);
   if (!normalized) {
     return null;
   }
 
-  const calibration = getRoom(roomId).calibration;
   if (!calibration) {
     return normalized;
   }
 
   return normalizePoint({
-    x: normalized.x * calibration.scaleX,
-    y: normalized.y * calibration.scaleY
+    x: normalized.x * calibration.scaleX + calibration.offsetX,
+    y: normalized.y * calibration.scaleY + calibration.offsetY
   });
+}
+
+function applyCalibrationPoint(roomId, point) {
+  return applyCalibrationToPoint(point, getRoom(roomId).calibration);
+}
+
+function buildExecutorHomeSettlePoint(roomId, calibration = null) {
+  return applyCalibrationToPoint(homeSettleReferenceTarget, calibration ?? getRoom(roomId).calibration)
+    ?? normalizePoint(homeSettleReferenceTarget);
+}
+
+function buildExecutorTapPayload(roomId, point, calibration = null) {
+  const normalizedPoint = normalizePoint(point);
+  if (!normalizedPoint) {
+    return null;
+  }
+
+  return {
+    point: normalizedPoint,
+    homeSettlePoint: buildExecutorHomeSettlePoint(roomId, calibration)
+  };
 }
 
 function collectImageAssetIds(steps) {
@@ -622,7 +640,7 @@ function finalizeCalibrationSession(roomId, status, message, options = {}) {
   broadcastCalibrationStatus(session, status, message, options.detail ?? null);
 }
 
-function computeAxisCorrection(samples, axis) {
+function computeAxisCorrection(samples, axis, options = {}) {
   const pairs = samples
     .map((sample) => ({ input: Number(sample.target?.[axis]), actual: Number(sample.actual?.[axis]) }))
     .filter((pair) => Number.isFinite(pair.input) && Number.isFinite(pair.actual));
@@ -645,12 +663,19 @@ function computeAxisCorrection(samples, axis) {
     return sorted[middle];
   };
 
+  const observedOrigin = Number(options.originActual);
+  const hasObservedOrigin = Number.isFinite(observedOrigin);
+  const inputOrigin = Number(options.originInput);
+  const hasInputOrigin = Number.isFinite(inputOrigin);
+  const effectiveInputOrigin = hasInputOrigin ? inputOrigin : 0;
+
   const fitLeastSquaresThroughOrigin = (inputPairs) => {
     let denominator = 0;
     let numerator = 0;
     for (const pair of inputPairs) {
-      denominator += pair.input ** 2;
-      numerator += pair.input * pair.actual;
+      const centeredInput = pair.input - effectiveInputOrigin;
+      denominator += centeredInput ** 2;
+      numerator += centeredInput * (pair.actual - (hasObservedOrigin ? observedOrigin : 0));
     }
 
     if (!Number.isFinite(denominator) || denominator <= 0) {
@@ -659,14 +684,14 @@ function computeAxisCorrection(samples, axis) {
 
     return {
       observedScale: numerator / denominator,
-      observedOffset: 0
+      observedOffset: hasObservedOrigin ? observedOrigin : 0
     };
   };
 
   let observedScale = median(pairs
-    .filter((pair) => Math.abs(pair.input) >= 0.0001)
-    .map((pair) => pair.actual / pair.input));
-  let observedOffset = 0;
+    .filter((pair) => Math.abs(pair.input - effectiveInputOrigin) >= 0.0001)
+    .map((pair) => (pair.actual - (hasObservedOrigin ? observedOrigin : 0)) / (pair.input - effectiveInputOrigin)));
+  let observedOffset = hasObservedOrigin ? observedOrigin : 0;
 
   if (!Number.isFinite(observedScale) || Math.abs(observedScale) < 0.001) {
     const leastSquares = fitLeastSquaresThroughOrigin(pairs);
@@ -674,7 +699,7 @@ function computeAxisCorrection(samples, axis) {
     observedOffset = leastSquares.observedOffset;
   }
 
-  const residuals = pairs.map((pair) => Math.abs(pair.actual - (observedScale * pair.input)));
+  const residuals = pairs.map((pair) => Math.abs(pair.actual - (observedOffset + observedScale * pair.input)));
   const residualMedian = median(residuals) ?? 0;
   const residualThreshold = Math.max(calibrationConsensusResidualFloor, residualMedian * 2.5);
   const inlierPairs = pairs.filter((pair, index) => residuals[index] <= residualThreshold);
@@ -691,7 +716,7 @@ function computeAxisCorrection(samples, axis) {
     observedScale,
     observedOffset,
     correctionScale: 1 / observedScale,
-    correctionOffset: -observedOffset / observedScale,
+    correctionOffset: effectiveInputOrigin - (observedOffset / observedScale),
     inlierCount: finalPairs.length,
     totalCount: pairs.length,
     residualMedian,
@@ -700,13 +725,21 @@ function computeAxisCorrection(samples, axis) {
 }
 
 function buildRoomCalibration(samples) {
-  const xAxis = computeAxisCorrection(samples, 'x');
-  const yAxis = computeAxisCorrection(samples, 'y');
+  const homeSample = samples.find((sample) => sample.stepId === calibrationHomeStep.id) ?? null;
+  const modeledSamples = samples.filter((sample) => sample.stepId !== calibrationHomeStep.id);
+  const xAxis = computeAxisCorrection(modeledSamples, 'x', {
+    originActual: homeSample?.actual?.x,
+    originInput: homeSample?.target?.x
+  });
+  const yAxis = computeAxisCorrection(modeledSamples, 'y', {
+    originActual: homeSample?.actual?.y,
+    originInput: homeSample?.target?.y
+  });
   return {
     scaleX: xAxis.correctionScale,
-    offsetX: 0,
+    offsetX: xAxis.correctionOffset,
     scaleY: yAxis.correctionScale,
-    offsetY: 0,
+    offsetY: yAxis.correctionOffset,
     observedScaleX: xAxis.observedScale,
     observedOffsetX: xAxis.observedOffset,
     observedScaleY: yAxis.observedScale,
@@ -720,7 +753,9 @@ function buildRoomCalibration(samples) {
       xResidualMedian: xAxis.residualMedian,
       yResidualMedian: yAxis.residualMedian,
       xResidualThreshold: xAxis.residualThreshold,
-      yResidualThreshold: yAxis.residualThreshold
+      yResidualThreshold: yAxis.residualThreshold,
+      homeInput: homeSample?.target ?? null,
+      homeActual: homeSample?.actual ?? null
     }
   };
 }
@@ -741,17 +776,81 @@ function computePointError(target, actual) {
   };
 }
 
-function getCalibrationAttempt(session, step) {
-  const attemptIndex = Math.max(0, Number(session.currentAttemptIndex ?? 0));
+function formatCalibrationMultiplier(value) {
+  return Number.isFinite(value) ? value.toFixed(3) : 'n/a';
+}
+
+function getCalibrationStage(session, step) {
+  if (session.phase === 'home') {
+    return {
+      captureMode: 'home',
+      attemptIndex: Math.max(0, Number(session.currentAttemptIndex ?? 0)),
+      retreatFactor: 1,
+      label: session.currentAttemptIndex > 0 ? `${step.label} · 重试 ${session.currentAttemptIndex}` : step.label,
+      target: normalizePoint(step.target),
+      displayTarget: normalizePoint(step.displayTarget ?? step.target)
+    };
+  }
+
+  if (session.phase === 'verify') {
+    return {
+      captureMode: 'verify',
+      attemptIndex: 0,
+      retreatFactor: 1,
+      label: step.label,
+      target: normalizePoint(step.target),
+      displayTarget: normalizePoint(step.displayTarget ?? step.target)
+    };
+  }
+
+  const baseCommandTarget = applyCalibrationPoint(session.roomId, step.target) ?? normalizePoint(step.target);
+  if (!baseCommandTarget) {
+    return null;
+  }
+
+  const pairState = session.sampleState?.stepId === step.id ? session.sampleState : null;
+  const captureMode = pairState ? 'half' : 'primary';
+  const attemptIndex = pairState
+    ? pairState.baseAttemptIndex + 1
+    : Math.max(0, Number(session.currentAttemptIndex ?? 0));
   const retreatFactor = calibrationRetryBackoffFactor ** attemptIndex;
+
   return {
+    captureMode,
     attemptIndex,
     retreatFactor,
-    label: attemptIndex > 0 ? `${step.label} · 回退 ${attemptIndex}` : step.label,
+    label: captureMode === 'half'
+      ? `${step.label} · 4/5 复测`
+      : (attemptIndex > 0 ? `${step.label} · 缩小到 ${formatCalibrationMultiplier(retreatFactor)} 倍` : `${step.label} · 初测`),
     target: normalizePoint({
-      x: step.target.x * retreatFactor,
-      y: step.target.y * retreatFactor
-    })
+      x: baseCommandTarget.x * retreatFactor,
+      y: baseCommandTarget.y * retreatFactor
+    }),
+    displayTarget: normalizePoint(step.displayTarget ?? step.target)
+  };
+}
+
+function evaluateCalibrationPair(baseSample, nextSample) {
+  const expectedRatioX = baseSample.commandTarget.x > 0.0001 ? nextSample.commandTarget.x / baseSample.commandTarget.x : null;
+  const expectedRatioY = baseSample.commandTarget.y > 0.0001 ? nextSample.commandTarget.y / baseSample.commandTarget.y : null;
+  const actualRatioX = baseSample.actual.x > 0.0001 ? nextSample.actual.x / baseSample.actual.x : null;
+  const actualRatioY = baseSample.actual.y > 0.0001 ? nextSample.actual.y / baseSample.actual.y : null;
+
+  const xDelta = Number.isFinite(actualRatioX) && Number.isFinite(expectedRatioX)
+    ? Math.abs(actualRatioX - expectedRatioX)
+    : Number.POSITIVE_INFINITY;
+  const yDelta = Number.isFinite(actualRatioY) && Number.isFinite(expectedRatioY)
+    ? Math.abs(actualRatioY - expectedRatioY)
+    : Number.POSITIVE_INFINITY;
+
+  return {
+    expectedRatioX,
+    expectedRatioY,
+    actualRatioX,
+    actualRatioY,
+    xDelta,
+    yDelta,
+    isValid: xDelta <= calibrationPairRatioTolerance && yDelta <= calibrationPairRatioTolerance
   };
 }
 
@@ -770,7 +869,8 @@ function trySolveCalibrationSamples(session) {
     return false;
   }
 
-  if (session.samples.length < calibrationMinimumSuccessfulSamples) {
+  const modeledSampleCount = session.samples.filter((sample) => sample.stepId !== calibrationHomeStep.id).length;
+  if (modeledSampleCount < calibrationMinimumSuccessfulSamples) {
     finalizeCalibrationSession(session.roomId, 'error', '成功采集的标定点太少，无法得出稳定结果', {
       detail: {
         sampleCount: session.samples.length,
@@ -830,10 +930,29 @@ function handleCalibrationCaptureTimeout(session) {
     return;
   }
 
-  if (pendingCapture.attemptIndex + 1 < calibrationMaxTapAttempts) {
+  if (session.phase === 'home' && pendingCapture.attemptIndex + 1 >= calibrationMaxTapAttempts) {
+    finalizeCalibrationSession(session.roomId, 'error', 'Home 右下固定参考点连续重试后仍未收到点击回传');
+    return;
+  }
+
+  if (pendingCapture.captureMode !== 'verify' && pendingCapture.attemptIndex + 1 < calibrationMaxTapAttempts) {
+    session.sampleState = null;
     session.currentAttemptIndex = pendingCapture.attemptIndex + 1;
-    const nextAttempt = getCalibrationAttempt(session, step);
-    broadcastCalibrationStatus(session, 'retrying', `点击没有回传，${step.label} 回退 1/2 后重试`, {
+    const nextAttempt = getCalibrationStage(session, step);
+    log('calibration_timeout_retry', {
+      roomId: session.roomId,
+      sessionId: session.sessionId,
+      stepId: step.id,
+      label: step.label,
+      captureMode: pendingCapture.captureMode,
+      previousCommandTarget: pendingCapture.commandTarget,
+      previousHomeSettlePoint: pendingCapture.homeSettlePoint,
+      nextTarget: nextAttempt?.target ?? null,
+      nextDisplayTarget: nextAttempt?.displayTarget ?? null,
+      nextRetreatFactor: nextAttempt?.retreatFactor ?? null,
+      nextAttemptIndex: session.currentAttemptIndex
+    });
+    broadcastCalibrationStatus(session, 'retrying', `点击没有回传，从更小的 ${step.label} 重新开始`, {
       stepId: step.id,
       label: step.label,
       phase: session.phase,
@@ -841,8 +960,10 @@ function handleCalibrationCaptureTimeout(session) {
       attemptCount: session.currentAttemptIndex + 1,
       maxTapAttempts: calibrationMaxTapAttempts,
       previousCommandTarget: pendingCapture.commandTarget,
-      nextTarget: nextAttempt.target,
-      retreatFactor: nextAttempt.retreatFactor
+      previousHomeSettlePoint: pendingCapture.homeSettlePoint,
+      nextTarget: nextAttempt?.target ?? null,
+      retreatFactor: nextAttempt?.retreatFactor ?? null,
+      captureMode: pendingCapture.captureMode
     });
     scheduleCalibrationStep(session, 320);
     return;
@@ -864,12 +985,11 @@ function handleCalibrationCaptureTimeout(session) {
     stepId: step.id,
     label: step.label,
     anchorLabel: step.anchorLabel ?? step.label,
-    stepProfileLabel: step.stepProfileLabel ?? null,
-    stepScale: step.stepScale ?? null,
     phase: session.phase,
     attemptCount: pendingCapture.attemptIndex + 1,
     lastCommandTarget: pendingCapture.commandTarget,
-    reason: 'tap_timeout'
+    reason: 'tap_timeout',
+    captureMode: pendingCapture.captureMode
   });
   broadcastCalibrationStatus(session, 'skipped', `连续回退后仍无回传，跳过 ${step.label}`, {
     stepId: step.id,
@@ -882,6 +1002,7 @@ function handleCalibrationCaptureTimeout(session) {
   });
 
   session.currentAttemptIndex = 0;
+  session.sampleState = null;
   session.currentStepIndex += 1;
   if (trySolveCalibrationSamples(session)) {
     return;
@@ -891,6 +1012,10 @@ function handleCalibrationCaptureTimeout(session) {
 }
 
 function getCurrentCalibrationStep(session) {
+  if (session.phase === 'home') {
+    return calibrationHomeStep;
+  }
+
   if (session.phase === 'verify') {
     return calibrationVerifyStep;
   }
@@ -899,12 +1024,18 @@ function getCurrentCalibrationStep(session) {
 }
 
 function dispatchCalibrationTap(session, step, options = {}) {
-  const attempt = options.attempt ?? getCalibrationAttempt(session, step);
-  const rawTarget = normalizePoint(attempt.target);
-  const shouldUseCalibration = options.useCalibration ?? Boolean(getRoom(session.roomId).calibration);
+  const stage = options.stage ?? getCalibrationStage(session, step);
+  const rawTarget = normalizePoint(stage?.target);
+  const shouldUseCalibration = options.useCalibration ?? (session.phase === 'verify' || session.phase === 'home');
   const target = shouldUseCalibration ? applyCalibrationPoint(session.roomId, rawTarget) : rawTarget;
   if (!target) {
     finalizeCalibrationSession(session.roomId, 'error', `标定点 ${step.id} 无效`);
+    return;
+  }
+
+  const executorPayload = buildExecutorTapPayload(session.roomId, target);
+  if (!executorPayload) {
+    finalizeCalibrationSession(session.roomId, 'error', `标定点 ${step.id} 的 executor 载荷无效`);
     return;
   }
 
@@ -916,9 +1047,7 @@ function dispatchCalibrationTap(session, step, options = {}) {
     requestId,
     action: 'tap',
     stepId: step.id,
-    payload: {
-      point: target
-    }
+    payload: executorPayload
   };
 
   if (!sendToExecutor(session.roomId, command)) {
@@ -943,29 +1072,51 @@ function dispatchCalibrationTap(session, step, options = {}) {
     rawTarget,
     baseTarget: normalizePoint(step.target),
     commandTarget: target,
+    homeSettlePoint: executorPayload.homeSettlePoint,
     phase: session.phase,
-    label: step.label,
-    attemptIndex: attempt.attemptIndex,
-    retreatFactor: attempt.retreatFactor,
+    label: stage.label,
+    attemptIndex: stage.attemptIndex,
+    retreatFactor: stage.retreatFactor,
+    captureMode: stage.captureMode,
     usedCalibration: shouldUseCalibration
   };
 
-  broadcastCalibrationStatus(session, 'dispatching', `已发送标定点击: ${step.label}`, {
+  log('calibration_dispatch', {
+    roomId: session.roomId,
+    sessionId: session.sessionId,
     stepId: step.id,
-    label: step.label,
-    anchorLabel: step.anchorLabel ?? step.label,
-    stepProfileLabel: step.stepProfileLabel ?? null,
-    stepScale: step.stepScale ?? null,
+    label: stage.label,
     phase: session.phase,
+    captureMode: stage.captureMode,
+    baseTarget: normalizePoint(step.target),
+    displayTarget: normalizePoint(stage.displayTarget ?? step.displayTarget ?? step.target),
+    stageTarget: stage.target,
     rawTarget,
-    displayTarget: normalizePoint(step.displayTarget ?? step.target),
     commandTarget: target,
+    homeSettlePoint: executorPayload.homeSettlePoint,
     usedCalibration: shouldUseCalibration,
     appliedCalibration: shouldUseCalibration ? getCalibrationSummary(getRoom(session.roomId)) : null,
-    attemptIndex: attempt.attemptIndex,
-    attemptCount: attempt.attemptIndex + 1,
+    attemptIndex: stage.attemptIndex,
+    retreatFactor: stage.retreatFactor,
+    requestId
+  });
+
+  broadcastCalibrationStatus(session, 'dispatching', `已发送标定点击: ${stage.label}`, {
+    stepId: step.id,
+    label: stage.label,
+    anchorLabel: step.anchorLabel ?? step.label,
+    captureMode: stage.captureMode,
+    phase: session.phase,
+    rawTarget,
+    displayTarget: normalizePoint(stage.displayTarget ?? step.displayTarget ?? step.target),
+    commandTarget: target,
+    homeSettlePoint: executorPayload.homeSettlePoint,
+    usedCalibration: shouldUseCalibration,
+    appliedCalibration: shouldUseCalibration ? getCalibrationSummary(getRoom(session.roomId)) : null,
+    attemptIndex: stage.attemptIndex,
+    attemptCount: stage.attemptIndex + 1,
     maxTapAttempts: calibrationMaxTapAttempts,
-    retreatFactor: attempt.retreatFactor,
+    retreatFactor: stage.retreatFactor,
     sampleIndex: session.currentStepIndex + 1,
     sampleCount: calibrationSampleSteps.length
   });
@@ -993,8 +1144,8 @@ function executeCalibrationStep(session) {
     return;
   }
 
-  const attempt = getCalibrationAttempt(session, step);
-  if (!attempt.target) {
+  const stage = getCalibrationStage(session, step);
+  if (!stage?.target) {
     finalizeCalibrationSession(session.roomId, 'error', `标定点 ${step.id} 无法生成有效重试目标`);
     return;
   }
@@ -1004,39 +1155,39 @@ function executeCalibrationStep(session) {
     method: 'armTapCapture',
     sessionId: session.sessionId,
     stepId: step.id,
-    label: step.label,
+    label: stage.label,
     anchorLabel: step.anchorLabel ?? step.label,
-    stepProfileLabel: step.stepProfileLabel ?? null,
-    stepScale: step.stepScale ?? null,
+    captureMode: stage.captureMode,
     phase: session.phase,
-    target: attempt.target,
-    displayTarget: normalizePoint(step.displayTarget ?? step.target),
-    attemptIndex: attempt.attemptIndex,
-    attemptCount: attempt.attemptIndex + 1,
+    target: normalizePoint(stage.displayTarget ?? step.displayTarget ?? step.target),
+    commandTarget: stage.target,
+    displayTarget: normalizePoint(stage.displayTarget ?? step.displayTarget ?? step.target),
+    attemptIndex: stage.attemptIndex,
+    attemptCount: stage.attemptIndex + 1,
     maxTapAttempts: calibrationMaxTapAttempts,
-    retreatFactor: attempt.retreatFactor
+    retreatFactor: stage.retreatFactor
   })) {
     finalizeCalibrationSession(session.roomId, 'error', '标定 App 当前不可用');
     return;
   }
 
-  broadcastCalibrationStatus(session, 'arming', `准备采集 ${step.label}`, {
+  broadcastCalibrationStatus(session, 'arming', `准备采集 ${stage.label}`, {
     stepId: step.id,
-    label: step.label,
+    label: stage.label,
     anchorLabel: step.anchorLabel ?? step.label,
-    stepProfileLabel: step.stepProfileLabel ?? null,
-    stepScale: step.stepScale ?? null,
+    captureMode: stage.captureMode,
     phase: session.phase,
-    target: attempt.target,
-    displayTarget: normalizePoint(step.displayTarget ?? step.target),
-    attemptIndex: attempt.attemptIndex,
-    attemptCount: attempt.attemptIndex + 1,
+    target: stage.target,
+    homeSettlePoint: buildExecutorHomeSettlePoint(session.roomId),
+    displayTarget: normalizePoint(stage.displayTarget ?? step.displayTarget ?? step.target),
+    attemptIndex: stage.attemptIndex,
+    attemptCount: stage.attemptIndex + 1,
     maxTapAttempts: calibrationMaxTapAttempts,
-    retreatFactor: attempt.retreatFactor,
+    retreatFactor: stage.retreatFactor,
     sampleIndex: session.currentStepIndex + 1,
     sampleCount: calibrationSampleSteps.length,
     calibration: session.calibration,
-    note: '全程复用 executor tap 内置的 home；采样默认先参考已有 scale 基线，再在超时后自动回退 1/2 连续重试'
+    note: '每个锚点先测一次，再测 4/5；如果实际点击也接近 4/5，就认定这组 scale 有效，否则从更小点继续'
   });
 
   clearCalibrationTimer(session);
@@ -1044,8 +1195,8 @@ function executeCalibrationStep(session) {
     const activeSession = getCalibrationSession(session.roomId, session.sessionId);
     if (activeSession) {
       dispatchCalibrationTap(activeSession, step, {
-        attempt,
-        useCalibration: activeSession.phase === 'verify'
+        stage,
+        useCalibration: activeSession.phase === 'verify' || activeSession.phase === 'home'
       });
     }
   }, 220);
@@ -1072,11 +1223,12 @@ function startCalibrationSession(roomId, owner) {
     roomId,
     ownerClientId: owner.clientId,
     appClientId: room.calibrationAppId,
-    phase: 'sample',
+    phase: 'home',
     currentStepIndex: 0,
     currentAttemptIndex: 0,
     samples: [],
     skippedSamples: [],
+    sampleState: null,
     calibration: room.calibration ? { ...room.calibration } : null,
     pendingExecutorCommand: null,
     pendingCapture: null,
@@ -1086,15 +1238,17 @@ function startCalibrationSession(roomId, owner) {
 
   calibrationSessions.set(roomId, session);
   broadcastCalibrationStatus(session, 'starting', '开始 HID 点击标定', {
-    sampleCount: calibrationSampleSteps.length,
+    sampleCount: calibrationSampleSteps.length + 1,
     baseAnchorCount: calibrationBaseAnchors.length,
-    stepProfiles: calibrationStepProfiles,
     verifyTarget: calibrationVerifyStep.target,
+    homeSettleTarget: homeSettleReferenceTarget,
+    homeSettleCommandTarget: buildExecutorHomeSettlePoint(roomId),
     existingCalibration: getCalibrationSummary(room),
-    note: '默认先带入上一轮 scale 基线，减少无效测试集；本轮继续保留回退 1/2 和多数一致样本求解'
+    note: '每次 home 后都会先按当前 calibration 固定移动到右下参考点，再执行剩余位移；标定时先测这个参考点的真实落点，再做锚点的 4/5 比例采样'
   });
-  broadcastCalibrationStatus(session, 'prepared', '不再单独发送 home，直接复用 tap 内置 home 开始采样', {
-    sampleCount: calibrationSampleSteps.length,
+  broadcastCalibrationStatus(session, 'prepared', '先采集 home 后的右下固定参考点，再进入锚点采样', {
+    sampleCount: calibrationSampleSteps.length + 1,
+    homeSettleTarget: homeSettleReferenceTarget,
     verifyTarget: calibrationVerifyStep.target
   });
   scheduleCalibrationStep(session, 250);
@@ -1148,8 +1302,10 @@ function handleCalibrationExecutorResult(roomId, message) {
     rawTarget: pendingCommand.rawTarget,
     commandTarget: pendingCommand.commandTarget,
     baseTarget: pendingCommand.baseTarget,
+    homeSettlePoint: pendingCommand.homeSettlePoint,
     attemptIndex: pendingCommand.attemptIndex,
     retreatFactor: pendingCommand.retreatFactor,
+    captureMode: pendingCommand.captureMode,
     timeoutHandle: captureTimeout
   };
 
@@ -1159,6 +1315,8 @@ function handleCalibrationExecutorResult(roomId, message) {
     phase: pendingCommand.phase,
     rawTarget: pendingCommand.rawTarget,
     commandTarget: pendingCommand.commandTarget,
+    homeSettlePoint: pendingCommand.homeSettlePoint,
+    captureMode: pendingCommand.captureMode,
     attemptIndex: pendingCommand.attemptIndex,
     attemptCount: pendingCommand.attemptIndex + 1,
     maxTapAttempts: calibrationMaxTapAttempts,
@@ -1202,6 +1360,20 @@ function handleCalibrationResult(roomId, source, message) {
     return;
   }
 
+  log('calibration_capture', {
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    stepId: message.stepId,
+    label: pendingCapture.label,
+    phase: session.phase,
+    captureMode: pendingCapture.captureMode,
+    baseTarget: pendingCapture.baseTarget,
+    commandTarget: pendingCapture.commandTarget,
+    iosActualPoint: actualPoint,
+    attemptIndex: pendingCapture.attemptIndex,
+    retreatFactor: pendingCapture.retreatFactor
+  });
+
   clearPendingCalibrationCapture(session);
   const step = getCurrentCalibrationStep(session);
   if (!step || step.id !== message.stepId) {
@@ -1211,33 +1383,213 @@ function handleCalibrationResult(roomId, source, message) {
 
   const effectiveTarget = pendingCapture.commandTarget;
   const errorDetail = computePointError(effectiveTarget, actualPoint);
-  if (session.phase === 'sample') {
-    session.samples.push({
-      stepId: step.id,
-      label: step.label,
-      anchorLabel: step.anchorLabel ?? step.label,
-      stepProfileLabel: step.stepProfileLabel ?? null,
-      stepScale: step.stepScale ?? null,
-      target: effectiveTarget,
-      baseTarget: pendingCapture.baseTarget,
-      displayTarget: normalizePoint(step.displayTarget ?? step.target),
+  if (session.phase === 'home') {
+    const homeSample = {
+      stepId: calibrationHomeStep.id,
+      label: calibrationHomeStep.label,
+      anchorLabel: calibrationHomeStep.anchorLabel,
+      target: normalizePoint(calibrationHomeStep.target),
+      baseTarget: normalizePoint(calibrationHomeStep.target),
+      displayTarget: normalizePoint(calibrationHomeStep.displayTarget),
       actual: actualPoint,
       error: errorDetail,
       attemptCount: pendingCapture.attemptIndex + 1,
-      retreatFactor: pendingCapture.retreatFactor
+      retreatFactor: 1
+    };
+    session.samples.push(homeSample);
+    session.phase = 'sample';
+    session.currentAttemptIndex = 0;
+    session.sampleState = null;
+
+    log('calibration_home_sample', {
+      roomId: session.roomId,
+      sessionId: session.sessionId,
+      referenceTarget: homeSample.target,
+      referenceActual: homeSample.actual,
+      referenceError: homeSample.error
     });
 
-    broadcastCalibrationStatus(session, 'captured', `已采集 ${step.label}`, {
+    broadcastCalibrationStatus(session, 'captured', '已采集 Home 右下固定参考点，开始锚点采样', {
+      stepId: calibrationHomeStep.id,
+      label: calibrationHomeStep.label,
+      captureMode: pendingCapture.captureMode,
+      target: homeSample.target,
+      homeSettlePoint: pendingCapture.homeSettlePoint,
+      actual: homeSample.actual,
+      error: homeSample.error,
+      sampleIndex: 1,
+      sampleCount: calibrationSampleSteps.length + 1
+    });
+
+    scheduleCalibrationStep(session, 320);
+    return;
+  }
+
+  if (session.phase === 'sample') {
+    if (pendingCapture.captureMode === 'primary') {
+      session.sampleState = {
+        stepId: step.id,
+        label: step.label,
+        baseAttemptIndex: pendingCapture.attemptIndex,
+        baseCommandTarget: effectiveTarget,
+        baseActual: actualPoint,
+        displayTarget: normalizePoint(step.displayTarget ?? step.target)
+      };
+
+      broadcastCalibrationStatus(session, 'captured', `已采集 ${pendingCapture.label}，开始 4/5 复测`, {
+        stepId: step.id,
+        label: pendingCapture.label,
+        anchorLabel: step.anchorLabel ?? step.label,
+        captureMode: pendingCapture.captureMode,
+        target: effectiveTarget,
+        displayTarget: normalizePoint(step.displayTarget ?? step.target),
+        actual: actualPoint,
+        error: errorDetail,
+        attemptIndex: pendingCapture.attemptIndex,
+        attemptCount: pendingCapture.attemptIndex + 1,
+        maxTapAttempts: calibrationMaxTapAttempts,
+        sampleIndex: session.currentStepIndex + 1,
+        sampleCount: calibrationSampleSteps.length
+      });
+
+      scheduleCalibrationStep(session, 320);
+      return;
+    }
+
+    const baseSample = session.sampleState;
+    if (!baseSample || baseSample.stepId !== step.id) {
+      finalizeCalibrationSession(session.roomId, 'error', '4/5 复测缺少上一组基础样本');
+      return;
+    }
+
+    const pairResult = evaluateCalibrationPair({
+      commandTarget: baseSample.baseCommandTarget,
+      actual: baseSample.baseActual
+    }, {
+      commandTarget: effectiveTarget,
+      actual: actualPoint
+    });
+
+    log('calibration_pair_check', {
+      roomId: session.roomId,
+      sessionId: session.sessionId,
       stepId: step.id,
       label: step.label,
+      baseTarget: baseSample.baseCommandTarget,
+      baseActual: baseSample.baseActual,
+      reducedTarget: effectiveTarget,
+      reducedActual: actualPoint,
+      pairResult
+    });
+
+    if (pairResult.isValid) {
+      session.samples.push({
+        stepId: `${step.id}-base-${baseSample.baseAttemptIndex}`,
+        label: `${step.label} · 基础点`,
+        anchorLabel: step.anchorLabel ?? step.label,
+        target: baseSample.baseCommandTarget,
+        baseTarget: normalizePoint(step.target),
+        displayTarget: baseSample.displayTarget,
+        actual: baseSample.baseActual,
+        error: computePointError(baseSample.baseCommandTarget, baseSample.baseActual),
+        attemptCount: baseSample.baseAttemptIndex + 1,
+        retreatFactor: calibrationRetryBackoffFactor ** baseSample.baseAttemptIndex
+      });
+      session.samples.push({
+        stepId: `${step.id}-reduced-${pendingCapture.attemptIndex}`,
+        label: `${step.label} · 4/5 复测`,
+        anchorLabel: step.anchorLabel ?? step.label,
+        target: effectiveTarget,
+        baseTarget: normalizePoint(step.target),
+        displayTarget: normalizePoint(step.displayTarget ?? step.target),
+        actual: actualPoint,
+        error: errorDetail,
+        attemptCount: pendingCapture.attemptIndex + 1,
+        retreatFactor: pendingCapture.retreatFactor
+      });
+
+      broadcastCalibrationStatus(session, 'captured', `已确认 ${step.label} 的 4/5 比例关系，样本有效`, {
+        stepId: step.id,
+        label: pendingCapture.label,
+        anchorLabel: step.anchorLabel ?? step.label,
+        captureMode: pendingCapture.captureMode,
+        baseTarget: baseSample.baseCommandTarget,
+        baseActual: baseSample.baseActual,
+        target: effectiveTarget,
+        displayTarget: normalizePoint(step.displayTarget ?? step.target),
+        actual: actualPoint,
+        error: errorDetail,
+        pairResult,
+        attemptIndex: pendingCapture.attemptIndex,
+        attemptCount: pendingCapture.attemptIndex + 1,
+        maxTapAttempts: calibrationMaxTapAttempts,
+        sampleIndex: session.currentStepIndex + 1,
+        sampleCount: calibrationSampleSteps.length
+      });
+
+      session.sampleState = null;
+      session.currentAttemptIndex = 0;
+      session.currentStepIndex += 1;
+      if (trySolveCalibrationSamples(session)) {
+        return;
+      }
+
+      scheduleCalibrationStep(session, 420);
+      return;
+    }
+
+    if (pendingCapture.attemptIndex + 1 >= calibrationMaxTapAttempts) {
+      session.skippedSamples.push({
+        stepId: step.id,
+        label: step.label,
+        anchorLabel: step.anchorLabel ?? step.label,
+        phase: session.phase,
+        attemptCount: pendingCapture.attemptIndex + 1,
+        lastCommandTarget: effectiveTarget,
+        reason: 'pair_ratio_invalid',
+        pairResult
+      });
+      broadcastCalibrationStatus(session, 'skipped', `连续缩小后 ${step.label} 仍不满足 4/5 比例，跳过`, {
+        stepId: step.id,
+        label: step.label,
+        pairResult,
+        attemptCount: pendingCapture.attemptIndex + 1,
+        skippedCount: session.skippedSamples.length,
+        sampleCount: session.samples.length
+      });
+      session.sampleState = null;
+      session.currentAttemptIndex = 0;
+      session.currentStepIndex += 1;
+      if (trySolveCalibrationSamples(session)) {
+        return;
+      }
+
+      scheduleCalibrationStep(session, 420);
+      return;
+    }
+
+    session.sampleState = {
+      stepId: step.id,
+      label: step.label,
+      baseAttemptIndex: pendingCapture.attemptIndex,
+      baseCommandTarget: effectiveTarget,
+      baseActual: actualPoint,
+      displayTarget: normalizePoint(step.displayTarget ?? step.target)
+    };
+    session.currentAttemptIndex = pendingCapture.attemptIndex;
+
+    broadcastCalibrationStatus(session, 'retrying', `${step.label} 未满足 4/5 比例，从更小点继续`, {
+      stepId: step.id,
+      label: pendingCapture.label,
       anchorLabel: step.anchorLabel ?? step.label,
-      stepProfileLabel: step.stepProfileLabel ?? null,
-      stepScale: step.stepScale ?? null,
+      captureMode: pendingCapture.captureMode,
+      baseTarget: baseSample.baseCommandTarget,
+      baseActual: baseSample.baseActual,
       target: effectiveTarget,
-      baseTarget: pendingCapture.baseTarget,
       displayTarget: normalizePoint(step.displayTarget ?? step.target),
       actual: actualPoint,
       error: errorDetail,
+      pairResult,
       attemptIndex: pendingCapture.attemptIndex,
       attemptCount: pendingCapture.attemptIndex + 1,
       maxTapAttempts: calibrationMaxTapAttempts,
@@ -1245,13 +1597,7 @@ function handleCalibrationResult(roomId, source, message) {
       sampleCount: calibrationSampleSteps.length
     });
 
-    session.currentAttemptIndex = 0;
-    session.currentStepIndex += 1;
-    if (trySolveCalibrationSamples(session)) {
-      return;
-    }
-
-    scheduleCalibrationStep(session, 600);
+    scheduleCalibrationStep(session, 320);
     return;
   }
 
@@ -1941,12 +2287,20 @@ function executeAutomationStep(session) {
       return;
     }
 
-    const requestId = dispatchExecutorCommand(session, 'tap', { point }, {
+    const command = buildExecutorTapPayload(session.roomId, point);
+    if (!command) {
+      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击执行载荷无效`, {
+        stepId: step.id
+      });
+      return;
+    }
+
+    const requestId = dispatchExecutorCommand(session, 'tap', command, {
       stepId: step.id,
       timeoutMs: 15_000,
       nextDelayMs: Number(step.postActionDelayMs) || 350
     });
-    broadcastAutomationAction(session, step, 'tap', { point, rawPoint, requestId });
+    broadcastAutomationAction(session, step, 'tap', { ...command, rawPoint, requestId });
     return;
   }
 
@@ -1972,6 +2326,7 @@ function executeAutomationStep(session) {
     const command = {
       from,
       to,
+      homeSettlePoint: buildExecutorHomeSettlePoint(session.roomId),
       holdMs: Number(step.holdMs) || 120,
       durationMs: Number(step.durationMs) || 450
     };
