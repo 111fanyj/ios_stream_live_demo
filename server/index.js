@@ -18,18 +18,22 @@ const debugFrameRequests = new Map();
 let nextClientId = 1;
 let nextAutomationSequence = 1;
 
+const defaultCalibration = Object.freeze({
+  scaleX: 0.26233594111346115,
+  scaleY: 0.260289536357444,
+  offsetX: 0,
+  offsetY: 0
+});
+const defaultCalibrationUpdatedAt = '2026-04-22T03:34:21.344Z';
+
 const calibrationBaseAnchors = [
   { id: 'sample-top-left', label: '左上锚点', target: { x: 0.18, y: 0.18 } },
-  { id: 'sample-top-right', label: '右上锚点', target: { x: 0.82, y: 0.18 } },
-  { id: 'sample-bottom-center', label: '下方锚点', target: { x: 0.50, y: 0.78 } }
+  { id: 'sample-top-right', label: '右上锚点', target: { x: 0.62, y: 0.28 } },
 ];
 
 const calibrationStepProfiles = [
-  { id: 'micro', label: '超小步幅', scale: 0.42 },
-  { id: 'tiny', label: '更小步幅', scale: 0.54 },
-  { id: 'small', label: '小步幅', scale: 0.68 },
-  { id: 'medium', label: '中步幅', scale: 0.80 },
-  { id: 'large', label: '大步幅', scale: 0.90 }
+  { id: 'micro', label: '超小步幅', scale: 0.4 },
+  { id: 'tiny', label: '更小步幅', scale: 0.5 },
 ];
 
 const calibrationSampleSteps = calibrationBaseAnchors.flatMap((anchor) => calibrationStepProfiles.map((profile) => ({
@@ -38,8 +42,11 @@ const calibrationSampleSteps = calibrationBaseAnchors.flatMap((anchor) => calibr
   anchorLabel: anchor.label,
   stepProfileLabel: profile.label,
   stepScale: profile.scale,
-  displayTarget: anchor.target,
   target: {
+    x: anchor.target.x * profile.scale,
+    y: anchor.target.y * profile.scale
+  },
+  displayTarget: {
     x: anchor.target.x * profile.scale,
     y: anchor.target.y * profile.scale
   }
@@ -55,7 +62,7 @@ const calibrationVerificationThreshold = 0.035;
 const calibrationCaptureTimeoutMs = 6_000;
 const calibrationRetryBackoffFactor = 0.5;
 const calibrationMaxTapAttempts = 5;
-const calibrationMinimumSuccessfulSamples = 6;
+const calibrationMinimumSuccessfulSamples = 3;
 const calibrationConsensusResidualFloor = 0.012;
 
 function log(...parts) {
@@ -98,8 +105,8 @@ function getRoom(roomId) {
       viewers: new Map(),
       probes: new Map(),
       calibrationAppId: null,
-      calibration: null,
-      calibrationUpdatedAt: null,
+      calibration: { ...defaultCalibration },
+      calibrationUpdatedAt: defaultCalibrationUpdatedAt,
       publisherConnectedAt: null,
       executorConnectedAt: null
     });
@@ -894,7 +901,8 @@ function getCurrentCalibrationStep(session) {
 function dispatchCalibrationTap(session, step, options = {}) {
   const attempt = options.attempt ?? getCalibrationAttempt(session, step);
   const rawTarget = normalizePoint(attempt.target);
-  const target = options.useCalibration ? applyCalibrationPoint(session.roomId, rawTarget) : rawTarget;
+  const shouldUseCalibration = options.useCalibration ?? Boolean(getRoom(session.roomId).calibration);
+  const target = shouldUseCalibration ? applyCalibrationPoint(session.roomId, rawTarget) : rawTarget;
   if (!target) {
     finalizeCalibrationSession(session.roomId, 'error', `标定点 ${step.id} 无效`);
     return;
@@ -938,7 +946,8 @@ function dispatchCalibrationTap(session, step, options = {}) {
     phase: session.phase,
     label: step.label,
     attemptIndex: attempt.attemptIndex,
-    retreatFactor: attempt.retreatFactor
+    retreatFactor: attempt.retreatFactor,
+    usedCalibration: shouldUseCalibration
   };
 
   broadcastCalibrationStatus(session, 'dispatching', `已发送标定点击: ${step.label}`, {
@@ -951,6 +960,8 @@ function dispatchCalibrationTap(session, step, options = {}) {
     rawTarget,
     displayTarget: normalizePoint(step.displayTarget ?? step.target),
     commandTarget: target,
+    usedCalibration: shouldUseCalibration,
+    appliedCalibration: shouldUseCalibration ? getCalibrationSummary(getRoom(session.roomId)) : null,
     attemptIndex: attempt.attemptIndex,
     attemptCount: attempt.attemptIndex + 1,
     maxTapAttempts: calibrationMaxTapAttempts,
@@ -1025,7 +1036,7 @@ function executeCalibrationStep(session) {
     sampleIndex: session.currentStepIndex + 1,
     sampleCount: calibrationSampleSteps.length,
     calibration: session.calibration,
-    note: '复用 executor tap 内置的 home，再 move + click；如果没收到点击，会自动回退 1/2 连续重试'
+    note: '全程复用 executor tap 内置的 home；采样默认先参考已有 scale 基线，再在超时后自动回退 1/2 连续重试'
   });
 
   clearCalibrationTimer(session);
@@ -1066,7 +1077,7 @@ function startCalibrationSession(roomId, owner) {
     currentAttemptIndex: 0,
     samples: [],
     skippedSamples: [],
-    calibration: null,
+    calibration: room.calibration ? { ...room.calibration } : null,
     pendingExecutorCommand: null,
     pendingCapture: null,
     timer: null,
@@ -1080,7 +1091,7 @@ function startCalibrationSession(roomId, owner) {
     stepProfiles: calibrationStepProfiles,
     verifyTarget: calibrationVerifyStep.target,
     existingCalibration: getCalibrationSummary(room),
-    note: '复用 tap/drag 原本内置的 home；本轮会先用更小步幅起步，没收到点击时自动回退 1/2，并用多数一致样本求解'
+    note: '默认先带入上一轮 scale 基线，减少无效测试集；本轮继续保留回退 1/2 和多数一致样本求解'
   });
   broadcastCalibrationStatus(session, 'prepared', '不再单独发送 home，直接复用 tap 内置 home 开始采样', {
     sampleCount: calibrationSampleSteps.length,

@@ -611,6 +611,8 @@ private struct CalibrationSurfaceView: View {
     let isArmed: Bool
     let surfaceHeight: CGFloat
     let showOverlayText: Bool
+    let showChrome: Bool
+    let showMarkerLabels: Bool
     let onTap: (CalibrationPoint) -> Void
 
     init(
@@ -619,6 +621,8 @@ private struct CalibrationSurfaceView: View {
         isArmed: Bool,
         surfaceHeight: CGFloat = 320,
         showOverlayText: Bool = true,
+        showChrome: Bool = true,
+        showMarkerLabels: Bool = true,
         onTap: @escaping (CalibrationPoint) -> Void
     ) {
         self.activeCommand = activeCommand
@@ -626,6 +630,8 @@ private struct CalibrationSurfaceView: View {
         self.isArmed = isArmed
         self.surfaceHeight = surfaceHeight
         self.showOverlayText = showOverlayText
+        self.showChrome = showChrome
+        self.showMarkerLabels = showMarkerLabels
         self.onTap = onTap
     }
 
@@ -633,17 +639,21 @@ private struct CalibrationSurfaceView: View {
         GeometryReader { geometry in
             let size = geometry.size
             ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.orange.opacity(0.16), Color.blue.opacity(0.12)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                if showChrome {
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.orange.opacity(0.16), Color.blue.opacity(0.12)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
 
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(isArmed ? Color.green.opacity(0.7) : Color.secondary.opacity(0.25), style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(isArmed ? Color.green.opacity(0.7) : Color.secondary.opacity(0.25), style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                } else {
+                    Color.white
+                }
 
                 if showOverlayText {
                     VStack(alignment: .leading, spacing: 6) {
@@ -676,6 +686,7 @@ private struct CalibrationSurfaceView: View {
             }
             .frame(maxWidth: .infinity, minHeight: surfaceHeight, maxHeight: surfaceHeight)
             .contentShape(Rectangle())
+            .clipped()
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onEnded { value in
@@ -696,26 +707,48 @@ private struct CalibrationSurfaceView: View {
 
     @ViewBuilder
     private func calibrationMarker(title: String, point: CalibrationPoint, color: Color, size: CGSize) -> some View {
-        let markerSize: CGFloat = 22
-        let x = max(0, min(size.width - markerSize, CGFloat(point.x) * size.width - markerSize / 2))
-        let y = max(0, min(size.height - markerSize, CGFloat(point.y) * size.height - markerSize / 2))
+        let markerSize: CGFloat = showChrome ? 22 : 18
+        let centerX = max(0, min(size.width, CGFloat(point.x) * size.width))
+        let centerY = max(0, min(size.height, CGFloat(point.y) * size.height))
 
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption2)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.ultraThinMaterial, in: Capsule())
+        Group {
+            if showMarkerLabels {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.caption2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial, in: Capsule())
 
-            Circle()
-                .fill(color)
-                .frame(width: markerSize, height: markerSize)
-                .overlay {
                     Circle()
-                        .stroke(Color.white, lineWidth: 2)
+                        .fill(color)
+                        .frame(width: markerSize, height: markerSize)
+                        .overlay {
+                            Circle()
+                                .stroke(Color.white, lineWidth: 2)
+                        }
                 }
+            } else {
+                ZStack {
+                    Circle()
+                        .stroke(color.opacity(0.95), lineWidth: 3)
+                        .frame(width: markerSize, height: markerSize)
+
+                    Circle()
+                        .fill(color.opacity(0.9))
+                        .frame(width: 6, height: 6)
+
+                    Rectangle()
+                        .fill(color.opacity(0.75))
+                        .frame(width: 1, height: 26)
+
+                    Rectangle()
+                        .fill(color.opacity(0.75))
+                        .frame(width: 26, height: 1)
+                }
+            }
         }
-        .position(x: x + markerSize / 2, y: y + markerSize / 2)
+        .position(x: centerX, y: centerY)
     }
 }
 
@@ -724,62 +757,19 @@ private struct CalibrationFullscreenView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
-                CalibrationSurfaceView(
-                    activeCommand: signalProbe.calibrationCommand,
-                    lastTap: signalProbe.lastCalibrationTap,
-                    isArmed: signalProbe.isCalibrationTapArmed,
-                    surfaceHeight: geometry.size.height,
-                    showOverlayText: false
-                ) { point in
-                    signalProbe.reportCalibrationTap(point)
-                }
-                .ignoresSafeArea()
-
-                VStack {
-                    HStack(alignment: .top, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(signalProbe.isCalibrationTapArmed ? "等待点击" : "标定待命")
-                                .font(.headline)
-                            Text(compactStatusText)
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.82))
-                                .lineLimit(2)
-                        }
-
-                        Spacer()
-
-                        if let command = signalProbe.calibrationCommand {
-                            Text(command.label)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(.ultraThinMaterial, in: Capsule())
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.34), in: RoundedRectangle(cornerRadius: 14))
-                    .padding(.top, 10)
-                    .padding(.horizontal, 10)
-
-                    Spacer()
-                }
+            CalibrationSurfaceView(
+                activeCommand: signalProbe.calibrationCommand,
+                lastTap: signalProbe.lastCalibrationTap,
+                isArmed: signalProbe.isCalibrationTapArmed,
+                surfaceHeight: geometry.size.height,
+                showOverlayText: false,
+                showChrome: false,
+                showMarkerLabels: false
+            ) { point in
+                signalProbe.reportCalibrationTap(point)
             }
+            .ignoresSafeArea()
         }
-    }
-
-    private var compactStatusText: String {
-        if let command = signalProbe.calibrationCommand {
-            return "\(command.phase) / 目标 \(formatCalibrationPoint(command.target))"
-        }
-
-        return signalProbe.calibrationStatus
-    }
-
-    private func formatCalibrationPoint(_ point: CalibrationPoint) -> String {
-        "(\(String(format: "%.2f", point.x)), \(String(format: "%.2f", point.y)))"
     }
 }
 
