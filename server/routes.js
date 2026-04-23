@@ -22,8 +22,8 @@ function registerRoutes(app, runtime) {
   app.get('/health', (_req, res) => {
     const roomSummary = Array.from(rooms.entries()).map(([roomId, room]) => ({
       roomId,
-      hasPublisher: Boolean(room.publisher),
-      hasExecutor: Boolean(room.executor),
+      hasPublisher: isClientOpen(room.publisher),
+      hasExecutor: isClientOpen(room.executor),
       hasCalibrationApp: isClientOpen(getCalibrationApp(roomId)),
       calibrationAppId: room.calibrationAppId,
       calibration: getCalibrationSummary(room),

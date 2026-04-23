@@ -224,9 +224,9 @@ function broadcastRoomState(roomId) {
   const payload = JSON.stringify({
     type: 'room_state',
     roomId,
-    hasPublisher: Boolean(room.publisher),
+    hasPublisher: isClientOpen(room.publisher),
     publisherId: room.publisher?.clientId ?? null,
-    hasExecutor: Boolean(room.executor),
+    hasExecutor: isClientOpen(room.executor),
     executorId: getExecutorId(room),
     hasCalibrationApp: isClientOpen(getCalibrationApp(roomId)),
     calibrationAppId: room.calibrationAppId,
@@ -240,9 +240,9 @@ function broadcastRoomState(roomId) {
 
   log('room_state_broadcast', {
     roomId,
-    hasPublisher: Boolean(room.publisher),
+    hasPublisher: isClientOpen(room.publisher),
     publisherId: room.publisher?.clientId ?? null,
-    hasExecutor: Boolean(room.executor),
+    hasExecutor: isClientOpen(room.executor),
     executorId: getExecutorId(room),
     hasCalibrationApp: isClientOpen(getCalibrationApp(roomId)),
     calibrationAppId: room.calibrationAppId,

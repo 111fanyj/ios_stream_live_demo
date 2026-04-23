@@ -423,7 +423,7 @@
 
           <label>
             房间 ID
-            <input id="roomIdInput" placeholder="default" />
+            <input id="roomIdInput" placeholder="demo-room" />
           </label>
 
           <label>
@@ -547,7 +547,7 @@
       let pendingRequestTimer = null;
 
       serverUrlInput.value = params.get('server') || defaultServerUrl;
-      roomIdInput.value = params.get('roomId') || 'default';
+      roomIdInput.value = params.get('roomId') || 'demo-room';
       queryInput.value = params.get('query') || '';
 
       function appendLog(line) {
@@ -564,7 +564,7 @@
         const base = serverUrlInput.value.trim() || defaultServerUrl;
         const url = new URL(base, window.location.href);
         url.searchParams.set('type', 'probe');
-        url.searchParams.set('roomId', roomIdInput.value.trim() || 'default');
+        url.searchParams.set('roomId', roomIdInput.value.trim() || 'demo-room');
         return url.toString();
       }
 
