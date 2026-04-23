@@ -53,6 +53,8 @@ open IOSStreamViewer.xcodeproj
 - App Group，默认值为 `group.com.example.IOSStreamViewer.shared`
 - Signing Team
 
+如果看到 `Embedded binary is not signed with the same certificate as the parent app` 或类似完整性校验错误，优先检查 App target 和 Broadcast Extension target 是否都切到了同一个本机可用的 Team，而不是继续使用仓库里的示例签名状态。
+
 同时确保：
 
 - App target 和 Extension target 都开启同一个 App Group。
