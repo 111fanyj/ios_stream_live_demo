@@ -832,11 +832,31 @@ function requestCalibrationColorFrame(session) {
     dy: sample.dy
   }));
 
+  log('calibration_color_frame_request_preparing', {
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    requestId,
+    sampleCount: session.samples.length,
+    skippedSampleCount: session.skippedSamples.length,
+    expectedColorCount: expectedColors.length,
+    publisherOpen: isClientOpen(getRoom(session.roomId).publisher)
+  });
+
   const timeoutHandle = setTimeout(() => {
     const activeSession = getCalibrationSession(session.roomId, session.sessionId);
     if (!activeSession || activeSession.pendingColorFrameRequest?.requestId !== requestId) {
       return;
     }
+
+    log('calibration_color_frame_request_timeout', {
+      roomId: session.roomId,
+      sessionId: session.sessionId,
+      requestId,
+      sampleCount: activeSession.samples.length,
+      skippedSampleCount: activeSession.skippedSamples.length,
+      pendingRequestId: activeSession.pendingColorFrameRequest?.requestId ?? null,
+      publisherOpen: isClientOpen(getRoom(session.roomId).publisher)
+    });
 
     finalizeCalibrationSession(session.roomId, 'error', '等待 Broadcast 彩色点截图分析超时', {
       detail: {
@@ -860,6 +880,16 @@ function requestCalibrationColorFrame(session) {
     edgeMarginRatio: calibrationEdgeMarginRatio
   });
 
+  log('calibration_color_frame_request_sent', {
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    requestId,
+    forwarded,
+    sampleCount: session.samples.length,
+    expectedColorCount: expectedColors.length,
+    publisherOpen: isClientOpen(getRoom(session.roomId).publisher)
+  });
+
   if (!forwarded) {
     finalizeCalibrationSession(session.roomId, 'error', 'Publisher 未连接，无法分析标定截图', {
       detail: {
@@ -878,6 +908,19 @@ function requestCalibrationColorFrame(session) {
 }
 
 function handleCalibrationColorFrameResult(roomId, message) {
+  log('calibration_color_frame_result_received', {
+    roomId,
+    sessionId: message.sessionId,
+    requestId: message.requestId,
+    status: message.status ?? 'ok',
+    payloadKeys: message.payload && typeof message.payload === 'object'
+      ? Object.keys(message.payload)
+      : [],
+    detectionCount: Array.isArray(message.payload?.detections)
+      ? message.payload.detections.length
+      : 0
+  });
+
   const session = getCalibrationSession(roomId, message.sessionId);
   if (!session) {
     log('calibration_color_frame_result_ignored', {
@@ -905,7 +948,23 @@ function handleCalibrationColorFrameResult(roomId, message) {
   }
   session.pendingColorFrameRequest = null;
 
+  log('calibration_color_frame_result_matched', {
+    roomId,
+    sessionId: session.sessionId,
+    requestId: message.requestId,
+    status: message.status ?? 'ok',
+    sampleCount: session.samples.length,
+    skippedSampleCount: session.skippedSamples.length
+  });
+
   if (message.status === 'error') {
+    log('calibration_color_frame_result_error', {
+      roomId,
+      sessionId: session.sessionId,
+      requestId: message.requestId,
+      error: message.error || 'Broadcast 彩色点截图分析失败'
+    });
+
     finalizeCalibrationSession(session.roomId, 'error', message.error || 'Broadcast 彩色点截图分析失败', {
       detail: {
         samples: session.samples,
@@ -917,7 +976,26 @@ function handleCalibrationColorFrameResult(roomId, message) {
 
   try {
     const frameResult = message.payload || {};
+    log('calibration_color_frame_compute_start', {
+      roomId,
+      sessionId: session.sessionId,
+      requestId: message.requestId,
+      sampleCount: session.samples.length,
+      detectionCount: Array.isArray(frameResult.detections) ? frameResult.detections.length : 0,
+      imageSize: frameResult.imageSize || null,
+      sourceFrameSize: frameResult.sourceFrameSize || null
+    });
+
     const calibration = buildRoomCalibrationFromColorFrame(session.samples, frameResult);
+
+    log('calibration_color_frame_compute_success', {
+      roomId,
+      sessionId: session.sessionId,
+      requestId: message.requestId,
+      sampleCount: session.samples.length,
+      calibration
+    });
+
     session.calibration = calibration;
     const room = getRoom(session.roomId);
     room.calibration = calibration;
@@ -936,6 +1014,15 @@ function handleCalibrationColorFrameResult(roomId, message) {
       }
     });
   } catch (error) {
+    log('calibration_color_frame_compute_failed', {
+      roomId,
+      sessionId: session.sessionId,
+      requestId: message.requestId,
+      error: error.message || '计算 HID move k 失败',
+      sampleCount: session.samples.length,
+      payload: message.payload || null
+    });
+
     finalizeCalibrationSession(session.roomId, 'error', error.message || '计算 HID move k 失败', {
       detail: {
         samples: session.samples,
