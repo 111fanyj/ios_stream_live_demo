@@ -440,6 +440,7 @@
           <div class="status-strip">
             <span id="socketStatus" class="pill warn">未连接</span>
             <span id="publisherStatus" class="pill warn">Publisher 未知</span>
+            <span id="calibrationAppStatus" class="pill warn">标定 App 未知</span>
             <span id="requestStatus" class="pill">等待请求</span>
             <span id="calibrationStatus" class="pill">未标定</span>
           </div>
@@ -523,6 +524,7 @@
       const calibrationButton = document.getElementById('calibrationButton');
       const socketStatus = document.getElementById('socketStatus');
       const publisherStatus = document.getElementById('publisherStatus');
+      const calibrationAppStatus = document.getElementById('calibrationAppStatus');
       const requestStatus = document.getElementById('requestStatus');
       const calibrationStatus = document.getElementById('calibrationStatus');
       const calibrationSummary = document.getElementById('calibrationSummary');
@@ -545,6 +547,7 @@
       let socket = null;
       let lastRequestId = null;
       let pendingRequestTimer = null;
+      let roomHasCalibrationApp = false;
 
       serverUrlInput.value = params.get('server') || defaultServerUrl;
       roomIdInput.value = params.get('roomId') || 'demo-room';
@@ -560,6 +563,11 @@
         element.textContent = text;
       }
 
+      function updateActionButtons(connected) {
+        requestButton.disabled = !connected;
+        calibrationButton.disabled = !connected || !roomHasCalibrationApp;
+      }
+
       function buildSocketUrl() {
         const base = serverUrlInput.value.trim() || defaultServerUrl;
         const url = new URL(base, window.location.href);
@@ -569,8 +577,11 @@
       }
 
       function setConnectedState(connected) {
-        requestButton.disabled = !connected;
-        calibrationButton.disabled = !connected;
+        if (!connected) {
+          roomHasCalibrationApp = false;
+          setPill(calibrationAppStatus, '标定 App 未连接', 'warn');
+        }
+        updateActionButtons(connected);
         connectButton.textContent = connected ? '断开调试通道' : '连接调试通道';
         setPill(socketStatus, connected ? '调试通道已连接' : '未连接', connected ? 'ok' : 'warn');
       }
@@ -774,15 +785,22 @@
       function handleMessage(event) {
         const message = JSON.parse(event.data);
         if (message.type === 'room_state') {
+          roomHasCalibrationApp = Boolean(message.hasCalibrationApp);
           setPill(
             publisherStatus,
             message.hasPublisher ? `Publisher 在线 · ${message.publisherId || 'unknown'}` : 'Publisher 不在线',
             message.hasPublisher ? 'ok' : 'warn'
           );
+          setPill(
+            calibrationAppStatus,
+            roomHasCalibrationApp ? `标定 App 在线 · ${message.calibrationAppId || 'unknown'}` : '标定 App 未连接',
+            roomHasCalibrationApp ? 'ok' : 'warn'
+          );
           if (message.calibration) {
             setPill(calibrationStatus, '已有标定参数', 'ok');
           }
-          appendLog(`room_state hasPublisher=${Boolean(message.hasPublisher)} viewerCount=${message.viewerCount || 0} probeCount=${message.probeCount || 0}`);
+          updateActionButtons(true);
+          appendLog(`room_state hasPublisher=${Boolean(message.hasPublisher)} hasCalibrationApp=${roomHasCalibrationApp} viewerCount=${message.viewerCount || 0} probeCount=${message.probeCount || 0}`);
           return;
         }
 
@@ -793,6 +811,7 @@
             message.hasPublisher ? `Publisher 在线 · ${message.publisherId || 'unknown'}` : 'Publisher 不在线',
             message.hasPublisher ? 'ok' : 'warn'
           );
+          setPill(calibrationAppStatus, '等待标定 App 注册', 'warn');
           return;
         }
 
@@ -912,6 +931,13 @@
       function startCalibration() {
         if (!socket || socket.readyState !== WebSocket.OPEN) {
           appendLog('调试通道未连接');
+          return;
+        }
+
+        if (!roomHasCalibrationApp) {
+          setPill(calibrationStatus, '缺少标定 App', 'danger');
+          calibrationSummary.textContent = '当前房间还没有连接中的标定 App。\n请先在 iPhone 主 App 中点击“连接标定通道”，并确认它和当前页面使用的是同一个 room。';
+          appendLog('calibration_start blocked: calibration app is not connected');
           return;
         }
 
