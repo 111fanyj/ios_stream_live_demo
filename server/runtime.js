@@ -32,7 +32,7 @@ const calibrationSampleSteps = [
 ];
 
 const calibrationCaptureTimeoutMs = 6_000;
-const calibrationColorFrameTimeoutMs = 8_000;
+const calibrationColorFrameTimeoutMs = 12_000;
 const calibrationMinimumSuccessfulSamples = 3;
 const calibrationEdgeMarginRatio = 0.05;
 const calibrationResidualFloorPixels = 12;
@@ -824,6 +824,7 @@ function trySolveCalibrationSamples(session) {
 function requestCalibrationColorFrame(session) {
   clearCalibrationTimer(session);
   const requestId = makeAutomationId('calibration-color-frame');
+  const startedAt = Date.now();
   const expectedColors = session.samples.map((sample) => ({
     stepId: sample.stepId,
     label: sample.label,
@@ -848,18 +849,28 @@ function requestCalibrationColorFrame(session) {
       return;
     }
 
+    const room = getRoom(session.roomId);
+    const elapsedMs = Date.now() - startedAt;
+
     log('calibration_color_frame_request_timeout', {
       roomId: session.roomId,
       sessionId: session.sessionId,
       requestId,
+      elapsedMs,
       sampleCount: activeSession.samples.length,
       skippedSampleCount: activeSession.skippedSamples.length,
       pendingRequestId: activeSession.pendingColorFrameRequest?.requestId ?? null,
-      publisherOpen: isClientOpen(getRoom(session.roomId).publisher)
+      publisherOpen: isClientOpen(room.publisher),
+      publisherClientId: room.publisher?.clientId ?? null
     });
 
     finalizeCalibrationSession(session.roomId, 'error', '等待 Broadcast 彩色点截图分析超时', {
       detail: {
+        requestId,
+        phase: activeSession.phase,
+        elapsedMs,
+        publisherOpen: isClientOpen(room.publisher),
+        publisherClientId: room.publisher?.clientId ?? null,
         samples: activeSession.samples,
         skippedSamples: activeSession.skippedSamples
       }
@@ -868,6 +879,7 @@ function requestCalibrationColorFrame(session) {
 
   session.pendingColorFrameRequest = {
     requestId,
+    startedAt,
     timeoutHandle
   };
 
@@ -946,6 +958,9 @@ function handleCalibrationColorFrameResult(roomId, message) {
   if (pendingRequest.timeoutHandle) {
     clearTimeout(pendingRequest.timeoutHandle);
   }
+  const elapsedMs = typeof pendingRequest.startedAt === 'number'
+    ? Date.now() - pendingRequest.startedAt
+    : null;
   session.pendingColorFrameRequest = null;
 
   log('calibration_color_frame_result_matched', {
@@ -953,6 +968,7 @@ function handleCalibrationColorFrameResult(roomId, message) {
     sessionId: session.sessionId,
     requestId: message.requestId,
     status: message.status ?? 'ok',
+    elapsedMs,
     sampleCount: session.samples.length,
     skippedSampleCount: session.skippedSamples.length
   });

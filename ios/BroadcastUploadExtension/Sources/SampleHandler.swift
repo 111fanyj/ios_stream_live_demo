@@ -85,6 +85,9 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private let targetMaxLongEdge = 960
     private let targetMaxBitrateBps = 1_200_000
     private let targetMinBitrateBps = 300_000
+    private let calibrationAnalysisMaxLongEdge = 960
+    private let calibrationColorMaxChannelDelta = 28
+    private let calibrationColorMaxTotalDelta = 56
     private let minimumSendInterval: TimeInterval = 1.0 / 12.0
     private let isoFormatter = ISO8601DateFormatter()
     private let automationCommandQueue = DispatchQueue(label: "IOSStreamViewer.BroadcastUploadExtension.RemoteAutomation")
@@ -777,7 +780,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
+        let startedAt = Date()
+        logEvent("开始处理彩色标定帧请求: \(requestID)")
+
         guard let pixelBuffer = automationCommandQueue.sync(execute: { latestVideoPixelBuffer }) else {
+            logEvent("彩色标定帧请求失败: 当前没有可用视频帧 \(requestID)")
             sendCalibrationColorFrameResult(
                 sessionID: sessionID,
                 requestID: requestID,
@@ -789,6 +796,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
 
         let expectedColors = decodeCalibrationExpectedColors(json["expectedColors"] as? [[String: Any]] ?? [])
         guard !expectedColors.isEmpty else {
+            logEvent("彩色标定帧请求失败: expectedColors 为空 \(requestID)")
             sendCalibrationColorFrameResult(
                 sessionID: sessionID,
                 requestID: requestID,
@@ -798,7 +806,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
+        logEvent("收到彩色标定帧请求: \(requestID) colors=\(expectedColors.count)")
+
         guard let payload = makeCalibrationColorFramePayload(pixelBuffer: pixelBuffer, expectedColors: expectedColors) else {
+            let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+            logEvent("彩色标定帧分析失败: \(requestID) elapsedMs=\(elapsedMs)")
             sendCalibrationColorFrameResult(
                 sessionID: sessionID,
                 requestID: requestID,
@@ -808,7 +820,9 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             return
         }
 
-        logEvent("收到彩色标定帧请求: \(requestID) colors=\(expectedColors.count)")
+        let detectionCount = (payload["detections"] as? [[String: Any]])?.count ?? 0
+        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        logEvent("已完成彩色标定帧分析: \(requestID) colors=\(expectedColors.count) detections=\(detectionCount) elapsedMs=\(elapsedMs)")
         sendCalibrationColorFrameResult(sessionID: sessionID, requestID: requestID, status: "ok", payload: payload)
     }
 
@@ -895,12 +909,23 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         pixelBuffer: CVPixelBuffer,
         expectedColors: [CalibrationExpectedColor]
     ) -> [String: Any]? {
-        let width = max(1, CVPixelBufferGetWidth(pixelBuffer))
-        let height = max(1, CVPixelBufferGetHeight(pixelBuffer))
+        let sourceWidth = max(1, CVPixelBufferGetWidth(pixelBuffer))
+        let sourceHeight = max(1, CVPixelBufferGetHeight(pixelBuffer))
+        let sourceLongEdge = max(sourceWidth, sourceHeight)
+        let analysisScale = min(1.0, Double(calibrationAnalysisMaxLongEdge) / Double(sourceLongEdge))
+        let width = max(1, Int((Double(sourceWidth) * analysisScale).rounded()))
+        let height = max(1, Int((Double(sourceHeight) * analysisScale).rounded()))
         let bytesPerPixel = 4
         var bytes = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let image: CIImage
+
+        if analysisScale < 0.999 {
+            image = sourceImage.transformed(by: CGAffineTransform(scaleX: analysisScale, y: analysisScale))
+        } else {
+            image = sourceImage
+        }
 
         bytes.withUnsafeMutableBytes { buffer in
             replayFrameSnapshotContext.render(
@@ -913,7 +938,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             )
         }
 
-        let minimumArea = 12
+        let minimumArea = max(6, Int((12.0 * analysisScale * analysisScale).rounded()))
         var detections: [[String: Any]] = []
 
         for expected in expectedColors {
@@ -955,6 +980,10 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 "width": width,
                 "height": height
             ],
+            "originalFrameSize": [
+                "width": sourceWidth,
+                "height": sourceHeight
+            ],
             "detections": detections,
             "capturedAt": isoFormatter.string(from: Date())
         ]
@@ -977,9 +1006,11 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             let byteRowStart = y * width * bytesPerPixel
             for x in 0..<width {
                 let offset = byteRowStart + x * bytesPerPixel
-                matching[rowStart + x] = Int(bytes[offset]) == expected.red &&
-                    Int(bytes[offset + 1]) == expected.green &&
-                    Int(bytes[offset + 2]) == expected.blue
+                matching[rowStart + x] = calibrationPixelMatches(
+                    bytes: bytes,
+                    offset: offset,
+                    expected: expected
+                )
             }
         }
 
@@ -1053,6 +1084,25 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         }
 
         return bestBlob
+    }
+
+    private func calibrationPixelMatches(
+        bytes: [UInt8],
+        offset: Int,
+        expected: CalibrationExpectedColor
+    ) -> Bool {
+        let red = Int(bytes[offset])
+        let green = Int(bytes[offset + 1])
+        let blue = Int(bytes[offset + 2])
+        let redDelta = abs(red - expected.red)
+        let greenDelta = abs(green - expected.green)
+        let blueDelta = abs(blue - expected.blue)
+        let totalDelta = redDelta + greenDelta + blueDelta
+
+        return redDelta <= calibrationColorMaxChannelDelta &&
+            greenDelta <= calibrationColorMaxChannelDelta &&
+            blueDelta <= calibrationColorMaxChannelDelta &&
+            totalDelta <= calibrationColorMaxTotalDelta
     }
 
     private func enqueueCalibrationNeighbor(
