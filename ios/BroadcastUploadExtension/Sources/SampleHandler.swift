@@ -913,6 +913,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         let sourceHeight = max(1, CVPixelBufferGetHeight(pixelBuffer))
         let sourceLongEdge = max(sourceWidth, sourceHeight)
         let analysisScale = min(1.0, Double(calibrationAnalysisMaxLongEdge) / Double(sourceLongEdge))
+        let coordinateScale = analysisScale < 0.999 ? (1.0 / analysisScale) : 1.0
         let width = max(1, Int((Double(sourceWidth) * analysisScale).rounded()))
         let height = max(1, Int((Double(sourceHeight) * analysisScale).rounded()))
         let bytesPerPixel = 4
@@ -953,20 +954,27 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 continue
             }
 
+            let centerX = (Double(blob.sumX) / Double(blob.count)) * coordinateScale
+            let centerY = (Double(blob.sumY) / Double(blob.count)) * coordinateScale
+            let boundsX = Double(blob.minX) * coordinateScale
+            let boundsY = Double(blob.minY) * coordinateScale
+            let boundsWidth = Double(max(1, blob.maxX - blob.minX + 1)) * coordinateScale
+            let boundsHeight = Double(max(1, blob.maxY - blob.minY + 1)) * coordinateScale
+
             detections.append([
                 "stepId": expected.stepID,
                 "label": expected.label,
                 "color": expected.colorHex,
                 "centerPx": [
-                    "x": Double(blob.sumX) / Double(blob.count),
-                    "y": Double(blob.sumY) / Double(blob.count)
+                    "x": centerX,
+                    "y": centerY
                 ],
                 "area": blob.count,
                 "bounds": [
-                    "x": blob.minX,
-                    "y": blob.minY,
-                    "width": max(1, blob.maxX - blob.minX + 1),
-                    "height": max(1, blob.maxY - blob.minY + 1)
+                    "x": boundsX,
+                    "y": boundsY,
+                    "width": boundsWidth,
+                    "height": boundsHeight
                 ]
             ])
         }
@@ -977,8 +985,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 "height": height
             ],
             "sourceFrameSize": [
-                "width": width,
-                "height": height
+                "width": sourceWidth,
+                "height": sourceHeight
             ],
             "originalFrameSize": [
                 "width": sourceWidth,

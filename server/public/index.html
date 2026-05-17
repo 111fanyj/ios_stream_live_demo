@@ -412,6 +412,13 @@
         color: var(--muted);
       }
 
+      .event-log {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        line-height: 1.45;
+      }
+
       .paste-target {
         border: 1px dashed var(--line);
         border-radius: 8px;
@@ -894,6 +901,132 @@
 
       function setLastExecutorResult(text) {
         lastExecutorResult.textContent = text;
+      }
+
+      function parseDisplayPoint(point) {
+        const x = Number(point?.x);
+        const y = Number(point?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          return null;
+        }
+        return { x, y };
+      }
+
+      function formatPointText(point, digits = 1) {
+        const parsed = parseDisplayPoint(point);
+        if (!parsed) {
+          return '未知';
+        }
+        return `(${parsed.x.toFixed(digits)}, ${parsed.y.toFixed(digits)})`;
+      }
+
+      function formatFramePointText(point) {
+        const parsed = parseDisplayPoint(point);
+        if (!parsed) {
+          return '未知';
+        }
+
+        const segments = [`${formatPointText(parsed, 1)} px`];
+        if (videoView.videoWidth > 0 && videoView.videoHeight > 0) {
+          const normalizedX = (parsed.x / videoView.videoWidth) * 100;
+          const normalizedY = (parsed.y / videoView.videoHeight) * 100;
+          segments.push(`${normalizedX.toFixed(1)}%, ${normalizedY.toFixed(1)}% of ${videoView.videoWidth} x ${videoView.videoHeight}`);
+        }
+        return segments.join(' / ');
+      }
+
+      function normalizeFramePoint(point) {
+        const parsed = parseDisplayPoint(point);
+        if (!parsed || videoView.videoWidth <= 0 || videoView.videoHeight <= 0) {
+          return null;
+        }
+
+        return {
+          x: clamp01(parsed.x / videoView.videoWidth),
+          y: clamp01(parsed.y / videoView.videoHeight)
+        };
+      }
+
+      function formatCommandLines(commands, acks) {
+        if (!Array.isArray(commands) || commands.length === 0) {
+          return [];
+        }
+
+        return commands.map((command, index) => {
+          const ack = Array.isArray(acks) ? acks[index] : null;
+          return ack ? `  ${index + 1}. ${command} => ${ack}` : `  ${index + 1}. ${command}`;
+        });
+      }
+
+      function renderAutomationActionTarget(message) {
+        const command = message.command || {};
+        if (message.action === 'tap') {
+          const point = normalizeFramePoint(command.framePoint);
+          if (point) {
+            drawPoint(point, `${message.stepId || 'tap'} 目标`);
+          }
+          return;
+        }
+
+        if (message.action === 'drag') {
+          const from = normalizeFramePoint(command.frameFrom);
+          const to = normalizeFramePoint(command.frameTo);
+          if (from && to) {
+            drawDrag(from, to, `${message.stepId || 'drag'} 目标`);
+          }
+        }
+      }
+
+      function buildAutomationActionLog(message) {
+        const command = message.command || {};
+        const requestId = command.requestId || 'unknown';
+        const lines = [`[action] ${message.action || 'action'} ${message.stepId || ''} / ${requestId}`.trim()];
+
+        if (message.action === 'tap') {
+          lines.push(`  目标帧坐标: ${formatFramePointText(command.framePoint)}`);
+          lines.push(`  转换后 raw HID: ${formatPointText(command.point, 0)}`);
+        } else if (message.action === 'drag') {
+          lines.push(`  起点帧坐标: ${formatFramePointText(command.frameFrom)}`);
+          lines.push(`  终点帧坐标: ${formatFramePointText(command.frameTo)}`);
+          lines.push(`  起点 raw HID: ${formatPointText(command.from, 0)}`);
+          lines.push(`  终点 raw HID: ${formatPointText(command.to, 0)}`);
+          if (Number.isFinite(Number(command.holdMs))) {
+            lines.push(`  holdMs: ${Number(command.holdMs)}`);
+          }
+          if (Number.isFinite(Number(command.durationMs))) {
+            lines.push(`  durationMs: ${Number(command.durationMs)}`);
+          }
+        }
+
+        lines.push('  说明: 帧坐标是视频帧里的像素位置，raw HID 是发给 ESP32 bridge 的设备坐标');
+        return lines.join('\n');
+      }
+
+      function buildExecutorResultLog(message) {
+        const payload = message.payload || {};
+        const lines = [`[executor] ${message.action || 'action'} ${message.status || 'unknown'} ${message.stepId || ''} / ${message.requestId || 'unknown'}`.trim()];
+
+        if (message.error) {
+          lines.push(`  错误: ${message.error}`);
+        }
+
+        if (message.action === 'tap') {
+          lines.push(`  设备点击目标: ${formatPointText(payload.target, 0)}`);
+        } else if (message.action === 'drag') {
+          lines.push(`  设备拖拽起点: ${formatPointText(payload.from, 0)}`);
+          lines.push(`  设备拖拽终点: ${formatPointText(payload.to, 0)}`);
+          if (Number.isFinite(Number(payload.segmentCount))) {
+            lines.push(`  拖拽分段: ${Number(payload.segmentCount)}`);
+          }
+        }
+
+        const commandLines = formatCommandLines(payload.commands, payload.acks);
+        if (commandLines.length > 0) {
+          lines.push('  HID 命令与 ACK:');
+          lines.push(...commandLines);
+        }
+
+        return lines.join('\n');
       }
 
       function setConnectionText(text) {
@@ -1437,9 +1570,16 @@
       function handleAutomationAction(message) {
         console.log('[automation_action]', message);
         const requestId = message.command?.requestId || 'unknown';
-        const summary = `${message.action || 'action'} ${message.stepId || ''} / ${requestId}`.trim();
+        const actionSummary = `${message.action || 'action'} ${message.stepId || ''} / ${requestId}`.trim();
+        const rawTarget = message.action === 'tap'
+          ? formatPointText(message.command?.point, 0)
+          : message.action === 'drag'
+            ? `${formatPointText(message.command?.from, 0)} -> ${formatPointText(message.command?.to, 0)}`
+            : '未知';
+        const summary = `${actionSummary} / ${rawTarget}`;
         setLastExecutorRequest(summary);
-        pushAutomationLine(`[action] ${summary}`);
+        pushAutomationLine(buildAutomationActionLog(message));
+        renderAutomationActionTarget(message);
       }
 
       function handleExecutorResult(message) {
@@ -1447,7 +1587,7 @@
         const summary = `${message.action || 'action'} ${message.status || 'unknown'} ${message.stepId || ''} / ${message.requestId || 'unknown'}`.trim();
         setLastExecutorRequest(`${message.action || 'action'} / ${message.requestId || 'unknown'}`);
         setLastExecutorResult(summary);
-        pushAutomationLine(`[executor] ${summary}`);
+        pushAutomationLine(buildExecutorResultLog(message));
         if (message.status !== 'ok') {
           automationState.textContent = `执行失败: ${message.action || 'action'}`;
         }
