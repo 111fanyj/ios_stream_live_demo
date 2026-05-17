@@ -1,4 +1,5 @@
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
 
 function registerRoutes(app, runtime) {
@@ -17,8 +18,20 @@ function registerRoutes(app, runtime) {
     revisionDirectory
   } = runtime;
 
+  const legacyPublicPath = path.join(__dirname, 'public');
+  const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
+  const frontendIndexPath = path.join(frontendDistPath, 'index.html');
+  const useReactUi = process.env.UI_MODE === 'react';
+  const canServeReactUi = useReactUi && fs.existsSync(frontendIndexPath);
+
   app.use(express.json({ limit: '30mb' }));
-  app.use(express.static(path.join(__dirname, 'public')));
+  app.use('/legacy', express.static(legacyPublicPath));
+
+  if (canServeReactUi) {
+    app.use(express.static(frontendDistPath));
+  } else {
+    app.use(express.static(legacyPublicPath));
+  }
   
   app.get('/health', (_req, res) => {
     const roomSummary = Array.from(rooms.entries()).map(([roomId, room]) => ({
@@ -141,6 +154,12 @@ function registerRoutes(app, runtime) {
       next(error);
     }
   });
+
+  if (canServeReactUi) {
+    app.get(['/', '/debug-ocr'], (_req, res) => {
+      res.sendFile(frontendIndexPath);
+    });
+  }
   
 }
 

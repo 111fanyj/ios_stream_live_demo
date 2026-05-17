@@ -31,6 +31,28 @@ STREAM_TOKEN=your-token npm start
 
 - `http://你的电脑IP:3000/`
 
+### React 前端迁移开发态
+
+当前仓库已经开始迁移到 React + Vite。现阶段保留旧版静态页面，同时提供新的前端开发入口：
+
+```bash
+npm install
+npm run dev
+```
+
+- Node/Express 仍在 `http://127.0.0.1:3000`
+- Vite 开发服务器默认在 `http://127.0.0.1:5173`
+- 新 React 工作台路由：`/`
+- 新 React OCR 调试路由：`/debug-ocr`
+- 旧版页面对照入口：`/legacy/` 与 `/legacy/debug-ocr.html`
+
+如果要用 Express 直接托管 React 构建产物，先构建，再用 React 模式启动：
+
+```bash
+npm run build
+npm run start:react
+```
+
 ## 2. 生成 iOS 工程
 
 需要本机安装 XcodeGen：

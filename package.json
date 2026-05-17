@@ -4,11 +4,25 @@
   "private": true,
   "description": "Minimal iOS screen streaming demo with a Node.js relay server",
   "scripts": {
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "start:react": "UI_MODE=react node server/index.js",
+    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node server/index.js",
+    "dev:client": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.6.0",
     "express": "^4.21.2",
     "jszip": "^3.10.1",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.1.2",
+    "vite": "^7.1.12"
   }
 }
