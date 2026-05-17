@@ -999,104 +999,461 @@ export function WorkbenchPage() {
         </div>
       </section>
 
-      <section className="panel stack-panel connection-panel-react">
-        <div className="panel-header">
-          <h2>连接查看端</h2>
-          <span className="panel-meta">WebSocket + WebRTC</span>
-        </div>
-        <label className="field-label">
-          <span>服务端地址</span>
-          <input value={viewer.serverUrl} onChange={(event) => viewer.updateConfig('serverUrl', event.target.value)} />
-        </label>
-        <label className="field-label">
-          <span>房间 ID</span>
-          <input value={viewer.roomId} onChange={(event) => viewer.updateConfig('roomId', event.target.value)} />
-        </label>
-        <label className="field-label">
-          <span>Token</span>
-          <input value={viewer.token} onChange={(event) => viewer.updateConfig('token', event.target.value)} placeholder="可选" />
-        </label>
-        <div className="button-row">
-          <button type="button" className="button-primary" onClick={viewer.connect}>连接</button>
-          <button type="button" className="button-secondary" onClick={viewer.disconnect}>断开</button>
-        </div>
-        <dl className="key-value-list compact-list">
-          <div>
-            <dt>连接状态</dt>
-            <dd>{viewer.connectionText}</dd>
+      <section className="workbench-top-grid">
+        <details className="panel collapsible-panel connection-panel-react" open>
+          <summary className="collapsible-summary">
+            <div className="collapsible-heading">
+              <strong className="collapsible-title">连接查看端</strong>
+              <span className="panel-meta">WebSocket + WebRTC</span>
+            </div>
+            <span className="collapse-indicator">展开 / 折叠</span>
+          </summary>
+          <div className="collapsible-body stack-panel">
+            <label className="field-label">
+              <span>服务端地址</span>
+              <input value={viewer.serverUrl} onChange={(event) => viewer.updateConfig('serverUrl', event.target.value)} />
+            </label>
+            <label className="field-label">
+              <span>房间 ID</span>
+              <input value={viewer.roomId} onChange={(event) => viewer.updateConfig('roomId', event.target.value)} />
+            </label>
+            <label className="field-label">
+              <span>Token</span>
+              <input value={viewer.token} onChange={(event) => viewer.updateConfig('token', event.target.value)} placeholder="可选" />
+            </label>
+            <div className="button-row">
+              <button type="button" className="button-primary" onClick={viewer.connect}>连接</button>
+              <button type="button" className="button-secondary" onClick={viewer.disconnect}>断开</button>
+            </div>
+            <dl className="key-value-list compact-list">
+              <div>
+                <dt>连接状态</dt>
+                <dd>{viewer.connectionText}</dd>
+              </div>
+              <div>
+                <dt>Publisher</dt>
+                <dd>{viewer.publisherText}</dd>
+              </div>
+              <div>
+                <dt>Executor</dt>
+                <dd>{viewer.executorText}</dd>
+              </div>
+              <div>
+                <dt>查看人数</dt>
+                <dd>{viewer.viewerCount}</dd>
+              </div>
+            </dl>
           </div>
-          <div>
-            <dt>Publisher</dt>
-            <dd>{viewer.publisherText}</dd>
+        </details>
+
+        <details className="panel collapsible-panel log-panel-react">
+          <summary className="collapsible-summary">
+            <div className="collapsible-heading">
+              <strong className="collapsible-title">连接日志</strong>
+              <span className="panel-meta">最近 60 条</span>
+            </div>
+            <span className="collapse-indicator">展开 / 折叠</span>
+          </summary>
+          <div className="collapsible-body stack-panel">
+            <pre className="console-panel">{viewer.debugLines.length > 0 ? viewer.debugLines.join('\n') : '等待连接...'}</pre>
           </div>
-          <div>
-            <dt>Executor</dt>
-            <dd>{viewer.executorText}</dd>
+        </details>
+
+        <details className="panel collapsible-panel log-panel-react">
+          <summary className="collapsible-summary">
+            <div className="collapsible-heading">
+              <strong className="collapsible-title">自动化状态</strong>
+              <span className="panel-meta">执行事件与 executor 回执</span>
+            </div>
+            <span className="collapse-indicator">展开 / 折叠</span>
+          </summary>
+          <div className="collapsible-body stack-panel">
+            <div className="button-row">
+              <button type="button" className="button-secondary" onClick={viewer.clearOverlay} disabled={viewer.overlayItems.length === 0}>
+                清空 overlay
+              </button>
+            </div>
+            <div className="detail-summary-grid summary-grid-compact">
+              <div className="summary-tile">
+                <span className="summary-label">状态</span>
+                <strong>{viewer.automationState}</strong>
+              </div>
+              <div className="summary-tile">
+                <span className="summary-label">最近请求</span>
+                <strong>{viewer.lastExecutorRequest}</strong>
+              </div>
+              <div className="summary-tile">
+                <span className="summary-label">最近结果</span>
+                <strong>{viewer.lastExecutorResult}</strong>
+              </div>
+            </div>
+            <pre className="console-panel">{viewer.automationLines.length > 0 ? viewer.automationLines.join('\n') : '等待自动化事件...'}</pre>
           </div>
-          <div>
-            <dt>查看人数</dt>
-            <dd>{viewer.viewerCount}</dd>
-          </div>
-        </dl>
+        </details>
       </section>
 
-      <section className="panel viewer-panel-react">
-        <div className="panel-header">
-          <div>
-            <h2>{viewer.roomTitle}</h2>
-            <p className="panel-copy small-copy">{viewer.lastFrameMeta}</p>
+      <section className="workbench-main-grid">
+        <section className="panel viewer-panel-react workspace-frame-panel">
+          <div className="panel-header">
+            <div>
+              <h2>{viewer.roomTitle}</h2>
+              <p className="panel-copy small-copy">{viewer.lastFrameMeta}</p>
+            </div>
+            <div className="status-row compact-status-row-react">
+              <span className={viewer.isLive ? 'badge ok' : 'badge'}>{viewer.isLive ? '直播中' : '等待直播'}</span>
+              <span className="badge">Overlay {viewer.overlayItems.length}</span>
+            </div>
           </div>
-          <div className="status-row compact-status-row-react">
-            <span className={viewer.isLive ? 'badge ok' : 'badge'}>{viewer.isLive ? '直播中' : '等待直播'}</span>
-            <span className="badge">Overlay {viewer.overlayItems.length}</span>
+          <div className="viewer-stage-react">
+            <div ref={videoShellRef} className={viewer.remoteStream ? 'video-shell-react live' : 'video-shell-react empty'}>
+              <video ref={viewer.videoRef} autoPlay playsInline muted />
+              {viewer.remoteStream ? (
+                <>
+                  <div className="video-overlay-react">{overlayElements}</div>
+                  <div className="crop-layer-react">
+                    <div
+                      className="crop-box-react"
+                      style={{
+                        left: `${crop.x * 100}%`,
+                        top: `${crop.y * 100}%`,
+                        width: `${crop.width * 100}%`,
+                        height: `${crop.height * 100}%`
+                      }}
+                      onPointerDown={(event) => handleStartCropDrag('move', event)}
+                    >
+                      <span className="crop-box-label-react">模板区域</span>
+                      {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map((handle) => (
+                        <span
+                          key={handle}
+                          className="crop-handle-react"
+                          data-handle={handle}
+                          onPointerDown={(event) => handleStartCropDrag(handle, event)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {!viewer.remoteStream ? (
+                <div className="video-empty-state">
+                  <strong>等待发布端视频</strong>
+                  <p>先连接同一个 room，收到 offer 后这里会自动建立视频轨道。</p>
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
-        <div className="viewer-stage-react">
-          <div ref={videoShellRef} className={viewer.remoteStream ? 'video-shell-react live' : 'video-shell-react empty'}>
-            <video ref={viewer.videoRef} autoPlay playsInline muted />
-            {viewer.remoteStream ? (
-              <>
-                <div className="video-overlay-react">{overlayElements}</div>
-                <div className="crop-layer-react">
-                  <div
-                    className="crop-box-react"
-                    style={{
-                      left: `${crop.x * 100}%`,
-                      top: `${crop.y * 100}%`,
-                      width: `${crop.width * 100}%`,
-                      height: `${crop.height * 100}%`
-                    }}
-                    onPointerDown={(event) => handleStartCropDrag('move', event)}
-                  >
-                    <span className="crop-box-label-react">模板区域</span>
-                    {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map((handle) => (
-                      <span
-                        key={handle}
-                        className="crop-handle-react"
-                        data-handle={handle}
-                        onPointerDown={(event) => handleStartCropDrag(handle, event)}
-                      />
-                    ))}
+        </section>
+
+        <section className="panel stack-panel editor-panel-react workspace-editor-panel">
+          <div className="panel-header">
+            <h2>方案编辑器</h2>
+            <span className="panel-meta">发布新的 revision</span>
+          </div>
+          <div className="detail-summary-grid summary-grid-compact">
+            <div className="summary-tile">
+              <span className="summary-label">Package ID</span>
+              <strong>{editorDraft.packageId || '未填写'}</strong>
+            </div>
+            <div className="summary-tile">
+              <span className="summary-label">名称</span>
+              <strong>{editorDraft.name || '未填写'}</strong>
+            </div>
+            <div className="summary-tile">
+              <span className="summary-label">动作数</span>
+              <strong>{editorDraft.steps.length}</strong>
+            </div>
+            <div className="summary-tile">
+              <span className="summary-label">图片数</span>
+              <strong>{editorDraft.images.length}</strong>
+            </div>
+          </div>
+          <div className="editor-layout-react">
+            <section className="nested-panel-react">
+              <div className="panel-header">
+                <h2>基本信息</h2>
+                <span className="panel-meta">编辑草稿</span>
+              </div>
+              <div className="form-grid-react compact-grid-react">
+                <label className="field-label">
+                  <span>Package ID</span>
+                  <input value={editorDraft.packageId} onChange={(event) => handleUpdateEditorField('packageId', event.target.value)} placeholder="例如 demo" />
+                </label>
+                <label className="field-label">
+                  <span>名称</span>
+                  <input value={editorDraft.name} onChange={(event) => handleUpdateEditorField('name', event.target.value)} placeholder="例如 Demo Flow" />
+                </label>
+              </div>
+              <div className="panel-header">
+                <h2>添加动作</h2>
+                <span className="panel-meta">先组装 JSON，再发布</span>
+              </div>
+              <label className="field-label">
+                <span>动作类型</span>
+                <select value={stepForm.type} onChange={(event) => handleUpdateStepField('type', event.target.value)}>
+                  {STEP_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label className="field-label">
+                <span>步骤 ID</span>
+                <input value={stepForm.id} onChange={(event) => handleUpdateStepField('id', event.target.value)} placeholder="例如 wait-login" />
+              </label>
+              {showWaitFields ? (
+                <>
+                  {isTextWaitType(stepForm.type) ? (
+                    <label className="field-label">
+                      <span>文字查询</span>
+                      <textarea value={stepForm.queryText} onChange={(event) => handleUpdateStepField('queryText', event.target.value)} rows="4" placeholder={"每行一个候选文字，例如\n登录\n立即开始"} />
+                    </label>
+                  ) : null}
+                  {isImageWaitType(stepForm.type) ? (
+                    <label className="field-label">
+                      <span>图片 Asset ID</span>
+                      <input value={stepForm.assetId} onChange={(event) => handleUpdateStepField('assetId', event.target.value)} placeholder="例如 login-icon" />
+                    </label>
+                  ) : null}
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>保存为</span>
+                      <input value={stepForm.saveAs} onChange={(event) => handleUpdateStepField('saveAs', event.target.value)} placeholder="例如 loginButton" />
+                    </label>
+                    {isImageWaitType(stepForm.type) ? (
+                      <label className="field-label">
+                        <span>阈值</span>
+                        <input value={stepForm.threshold} type="number" min="0" max="1" step="0.01" onChange={(event) => handleUpdateStepField('threshold', event.target.value)} />
+                      </label>
+                    ) : null}
+                  </div>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>超时 ms</span>
+                      <input value={stepForm.timeoutMs} type="number" onChange={(event) => handleUpdateStepField('timeoutMs', event.target.value)} />
+                    </label>
+                    <label className="field-label">
+                      <span>轮询 ms</span>
+                      <input value={stepForm.pollIntervalMs} type="number" onChange={(event) => handleUpdateStepField('pollIntervalMs', event.target.value)} />
+                    </label>
+                  </div>
+                </>
+              ) : null}
+              {showLoopFields ? (
+                <label className="field-label">
+                  <span>loop 动作类型</span>
+                  <select value={stepForm.loopActionType} onChange={(event) => handleUpdateStepField('loopActionType', event.target.value)}>
+                    <option value="tap">点击</option>
+                    <option value="drag">拖拽</option>
+                  </select>
+                </label>
+              ) : null}
+              {effectiveActionType === 'tap' ? (
+                <div className="subtle-panel-react">
+                  <div className="panel-header">
+                    <h2>点击目标</h2>
+                    <span className="panel-meta">引用或像素坐标二选一</span>
+                  </div>
+                  <label className="field-label">
+                    <span>目标引用</span>
+                    <input value={stepForm.targetRef} onChange={(event) => handleUpdateStepField('targetRef', event.target.value)} placeholder="例如 loginButton" />
+                  </label>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>x 像素</span>
+                      <input value={stepForm.targetX} type="number" onChange={(event) => handleUpdateStepField('targetX', event.target.value)} placeholder="例如 320" />
+                    </label>
+                    <label className="field-label">
+                      <span>y 像素</span>
+                      <input value={stepForm.targetY} type="number" onChange={(event) => handleUpdateStepField('targetY', event.target.value)} placeholder="例如 480" />
+                    </label>
+                  </div>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>x 偏移 px</span>
+                      <input value={stepForm.targetOffsetX} type="number" onChange={(event) => handleUpdateStepField('targetOffsetX', event.target.value)} />
+                    </label>
+                    <label className="field-label">
+                      <span>y 偏移 px</span>
+                      <input value={stepForm.targetOffsetY} type="number" onChange={(event) => handleUpdateStepField('targetOffsetY', event.target.value)} />
+                    </label>
                   </div>
                 </div>
-              </>
-            ) : null}
-            {!viewer.remoteStream ? (
-              <div className="video-empty-state">
-                <strong>等待发布端视频</strong>
-                <p>先连接同一个 room，收到 offer 后这里会自动建立视频轨道。</p>
+              ) : null}
+              {effectiveActionType === 'drag' ? (
+                <div className="subtle-panel-react">
+                  <div className="panel-header">
+                    <h2>拖拽目标</h2>
+                    <span className="panel-meta">起点与终点都需要</span>
+                  </div>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>起点引用</span>
+                      <input value={stepForm.fromRef} onChange={(event) => handleUpdateStepField('fromRef', event.target.value)} placeholder="可选" />
+                    </label>
+                    <label className="field-label">
+                      <span>终点引用</span>
+                      <input value={stepForm.toRef} onChange={(event) => handleUpdateStepField('toRef', event.target.value)} placeholder="可选" />
+                    </label>
+                  </div>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>起点 x</span>
+                      <input value={stepForm.fromX} type="number" onChange={(event) => handleUpdateStepField('fromX', event.target.value)} placeholder="例如 320" />
+                    </label>
+                    <label className="field-label">
+                      <span>起点 y</span>
+                      <input value={stepForm.fromY} type="number" onChange={(event) => handleUpdateStepField('fromY', event.target.value)} placeholder="例如 420" />
+                    </label>
+                  </div>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>起点 x 偏移</span>
+                      <input value={stepForm.fromOffsetX} type="number" onChange={(event) => handleUpdateStepField('fromOffsetX', event.target.value)} />
+                    </label>
+                    <label className="field-label">
+                      <span>起点 y 偏移</span>
+                      <input value={stepForm.fromOffsetY} type="number" onChange={(event) => handleUpdateStepField('fromOffsetY', event.target.value)} />
+                    </label>
+                  </div>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>终点 x</span>
+                      <input value={stepForm.toX} type="number" onChange={(event) => handleUpdateStepField('toX', event.target.value)} placeholder="例如 320" />
+                    </label>
+                    <label className="field-label">
+                      <span>终点 y</span>
+                      <input value={stepForm.toY} type="number" onChange={(event) => handleUpdateStepField('toY', event.target.value)} placeholder="例如 620" />
+                    </label>
+                  </div>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>终点 x 偏移</span>
+                      <input value={stepForm.toOffsetX} type="number" onChange={(event) => handleUpdateStepField('toOffsetX', event.target.value)} />
+                    </label>
+                    <label className="field-label">
+                      <span>终点 y 偏移</span>
+                      <input value={stepForm.toOffsetY} type="number" onChange={(event) => handleUpdateStepField('toOffsetY', event.target.value)} />
+                    </label>
+                  </div>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>按住 ms</span>
+                      <input value={stepForm.holdMs} type="number" onChange={(event) => handleUpdateStepField('holdMs', event.target.value)} />
+                    </label>
+                    <label className="field-label">
+                      <span>移动 ms</span>
+                      <input value={stepForm.durationMs} type="number" onChange={(event) => handleUpdateStepField('durationMs', event.target.value)} />
+                    </label>
+                  </div>
+                </div>
+              ) : null}
+              <div className="button-row">
+                <button type="button" className="button-primary" onClick={handleAddStep}>加入动作</button>
+                <button type="button" className="button-secondary" onClick={handleClearSteps} disabled={editorDraft.steps.length === 0}>清空动作</button>
               </div>
-            ) : null}
-          </div>
-        </div>
-      </section>
+              <p className="helper-text">{editorStatus}</p>
+            </section>
 
-      <section className="panel stack-panel log-panel-react">
-        <div className="panel-header">
-          <h2>连接日志</h2>
-          <span className="panel-meta">最近 60 条</span>
-        </div>
-        <pre className="console-panel">{viewer.debugLines.length > 0 ? viewer.debugLines.join('\n') : '等待连接...'}</pre>
+            <section className="nested-panel-react">
+              <div className="panel-header">
+                <h2>图片模板</h2>
+                <span className="panel-meta">发布时会一起打包</span>
+              </div>
+              <div className="form-grid-react compact-grid-react">
+                <label className="field-label">
+                  <span>截图 x</span>
+                  <input value={formatCropValue(crop.x)} type="number" min="0" max="1" step="0.01" onChange={(event) => handleCropInputChange('x', event.target.value)} />
+                </label>
+                <label className="field-label">
+                  <span>截图 y</span>
+                  <input value={formatCropValue(crop.y)} type="number" min="0" max="1" step="0.01" onChange={(event) => handleCropInputChange('y', event.target.value)} />
+                </label>
+              </div>
+              <div className="form-grid-react compact-grid-react">
+                <label className="field-label">
+                  <span>宽</span>
+                  <input value={formatCropValue(crop.width)} type="number" min="0.02" max="1" step="0.01" onChange={(event) => handleCropInputChange('width', event.target.value)} />
+                </label>
+                <label className="field-label">
+                  <span>高</span>
+                  <input value={formatCropValue(crop.height)} type="number" min="0.02" max="1" step="0.01" onChange={(event) => handleCropInputChange('height', event.target.value)} />
+                </label>
+              </div>
+              <div className="form-grid-react compact-grid-react">
+                <label className="field-label">
+                  <span>Asset ID</span>
+                  <input value={assetDraftId} onChange={(event) => setAssetDraftId(event.target.value)} placeholder="例如 login-icon" />
+                </label>
+                <label className="field-label">
+                  <span>上传图片</span>
+                  <input type="file" accept="image/*" onChange={handleAssetFileChange} />
+                </label>
+              </div>
+              <div className="button-row">
+                <button type="button" className="button-secondary" onClick={handleCaptureAssetFromVideo} disabled={!viewer.remoteStream}>
+                  从当前画面截取模板
+                </button>
+              </div>
+              <div className="asset-gallery-react">
+                {editorDraft.images.map((asset) => (
+                  <article className="asset-card-react" key={asset.assetId}>
+                    <img src={asset.dataUrl} alt={asset.assetId} />
+                    <footer>
+                      <strong>{asset.assetId}</strong>
+                      <button type="button" className="button-tertiary danger-text" onClick={() => handleRemoveAsset(asset.assetId)}>移除</button>
+                    </footer>
+                  </article>
+                ))}
+                {editorDraft.images.length === 0 ? <p className="muted-text">还没有图片模板，可先上传 PNG/JPG。</p> : null}
+              </div>
+              <div className="panel-header">
+                <h2>动作列表</h2>
+                <span className="panel-meta">支持上移、下移、删除</span>
+              </div>
+              <div className="step-list">
+                {editorDraft.steps.map((step, index) => (
+                  <article className="step-card" key={step.id || `${step.type}-${index}`}>
+                    <div className="step-card-head">
+                      <strong>{index + 1}. {step.id || '未命名步骤'}</strong>
+                      <span className="badge accent">{STEP_TYPE_LABELS[step.type] || step.type}</span>
+                    </div>
+                    <p className="panel-copy small-copy">{formatStepSummary(step)}</p>
+                    <div className="step-details-react">
+                      {buildStepDetailLines(step).map((line) => <div key={line}>{line}</div>)}
+                    </div>
+                    <div className="inline-button-row-react">
+                      <button type="button" className="button-tertiary" onClick={() => handleMoveStep(index, -1)} disabled={index === 0}>上移</button>
+                      <button type="button" className="button-tertiary" onClick={() => handleMoveStep(index, 1)} disabled={index === editorDraft.steps.length - 1}>下移</button>
+                      <button type="button" className="button-tertiary danger-text" onClick={() => handleRemoveStep(index)}>删除</button>
+                    </div>
+                  </article>
+                ))}
+                {editorDraft.steps.length === 0 ? <p className="muted-text">还没有动作，可先在左侧添加步骤。</p> : null}
+              </div>
+            </section>
+
+            <section className="nested-panel-react">
+              <div className="panel-header">
+                <h2>JSON 预览</h2>
+                <span className="panel-meta">发布前检查结构</span>
+              </div>
+              <textarea className="code-preview-react" readOnly value={editorPreview} />
+              <div className="button-row">
+                <button type="button" className="button-primary" onClick={handlePublishPackage} disabled={isPublishing}>
+                  {isPublishing ? '发布中...' : '发布新 revision'}
+                </button>
+                <button type="button" className="button-secondary" onClick={handleLoadDetailIntoEditor} disabled={!detail || detailLoading}>
+                  用当前选中 revision 覆盖草稿
+                </button>
+              </div>
+              <p className={publishStatus.includes('失败') ? 'error-text' : 'helper-text'}>{publishStatus}</p>
+              {publishDownloadUrl ? (
+                <div className="button-row">
+                  <a className="button-secondary link-button" href={publishDownloadUrl} target="_blank" rel="noreferrer">
+                    下载刚发布的 ZIP
+                  </a>
+                </div>
+              ) : null}
+            </section>
+          </div>
+        </section>
       </section>
 
       <section className="panel stack-panel execution-panel-react">
@@ -1157,33 +1514,6 @@ export function WorkbenchPage() {
           ))}
           {!packagesLoading && packages.length === 0 ? <p className="muted-text">还没有自动化方案。</p> : null}
         </div>
-      </section>
-
-      <section className="panel stack-panel log-panel-react">
-        <div className="panel-header">
-          <h2>自动化状态</h2>
-          <span className="panel-meta">执行事件与 executor 回执</span>
-        </div>
-        <div className="button-row">
-          <button type="button" className="button-secondary" onClick={viewer.clearOverlay} disabled={viewer.overlayItems.length === 0}>
-            清空 overlay
-          </button>
-        </div>
-        <div className="detail-summary-grid summary-grid-compact">
-          <div className="summary-tile">
-            <span className="summary-label">状态</span>
-            <strong>{viewer.automationState}</strong>
-          </div>
-          <div className="summary-tile">
-            <span className="summary-label">最近请求</span>
-            <strong>{viewer.lastExecutorRequest}</strong>
-          </div>
-          <div className="summary-tile">
-            <span className="summary-label">最近结果</span>
-            <strong>{viewer.lastExecutorResult}</strong>
-          </div>
-        </div>
-        <pre className="console-panel">{viewer.automationLines.length > 0 ? viewer.automationLines.join('\n') : '等待自动化事件...'}</pre>
       </section>
 
       <section className="panel stack-panel">
@@ -1318,316 +1648,6 @@ export function WorkbenchPage() {
         ) : null}
       </section>
 
-      <section className="panel stack-panel editor-panel-react">
-        <div className="panel-header">
-          <h2>方案编辑器</h2>
-          <span className="panel-meta">发布新的 revision</span>
-        </div>
-        <div className="detail-summary-grid summary-grid-compact">
-          <div className="summary-tile">
-            <span className="summary-label">Package ID</span>
-            <strong>{editorDraft.packageId || '未填写'}</strong>
-          </div>
-          <div className="summary-tile">
-            <span className="summary-label">名称</span>
-            <strong>{editorDraft.name || '未填写'}</strong>
-          </div>
-          <div className="summary-tile">
-            <span className="summary-label">动作数</span>
-            <strong>{editorDraft.steps.length}</strong>
-          </div>
-          <div className="summary-tile">
-            <span className="summary-label">图片数</span>
-            <strong>{editorDraft.images.length}</strong>
-          </div>
-        </div>
-        <div className="editor-layout-react">
-          <section className="nested-panel-react">
-            <div className="panel-header">
-              <h2>基本信息</h2>
-              <span className="panel-meta">编辑草稿</span>
-            </div>
-            <div className="form-grid-react compact-grid-react">
-              <label className="field-label">
-                <span>Package ID</span>
-                <input value={editorDraft.packageId} onChange={(event) => handleUpdateEditorField('packageId', event.target.value)} placeholder="例如 demo" />
-              </label>
-              <label className="field-label">
-                <span>名称</span>
-                <input value={editorDraft.name} onChange={(event) => handleUpdateEditorField('name', event.target.value)} placeholder="例如 Demo Flow" />
-              </label>
-            </div>
-            <div className="panel-header">
-              <h2>添加动作</h2>
-              <span className="panel-meta">先组装 JSON，再发布</span>
-            </div>
-            <label className="field-label">
-              <span>动作类型</span>
-              <select value={stepForm.type} onChange={(event) => handleUpdateStepField('type', event.target.value)}>
-                {STEP_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
-            <label className="field-label">
-              <span>步骤 ID</span>
-              <input value={stepForm.id} onChange={(event) => handleUpdateStepField('id', event.target.value)} placeholder="例如 wait-login" />
-            </label>
-            {showWaitFields ? (
-              <>
-                {isTextWaitType(stepForm.type) ? (
-                  <label className="field-label">
-                    <span>文字查询</span>
-                    <textarea value={stepForm.queryText} onChange={(event) => handleUpdateStepField('queryText', event.target.value)} rows="4" placeholder={"每行一个候选文字，例如\n登录\n立即开始"} />
-                  </label>
-                ) : null}
-                {isImageWaitType(stepForm.type) ? (
-                  <label className="field-label">
-                    <span>图片 Asset ID</span>
-                    <input value={stepForm.assetId} onChange={(event) => handleUpdateStepField('assetId', event.target.value)} placeholder="例如 login-icon" />
-                  </label>
-                ) : null}
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>保存为</span>
-                    <input value={stepForm.saveAs} onChange={(event) => handleUpdateStepField('saveAs', event.target.value)} placeholder="例如 loginButton" />
-                  </label>
-                  {isImageWaitType(stepForm.type) ? (
-                    <label className="field-label">
-                      <span>阈值</span>
-                      <input value={stepForm.threshold} type="number" min="0" max="1" step="0.01" onChange={(event) => handleUpdateStepField('threshold', event.target.value)} />
-                    </label>
-                  ) : null}
-                </div>
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>超时 ms</span>
-                    <input value={stepForm.timeoutMs} type="number" onChange={(event) => handleUpdateStepField('timeoutMs', event.target.value)} />
-                  </label>
-                  <label className="field-label">
-                    <span>轮询 ms</span>
-                    <input value={stepForm.pollIntervalMs} type="number" onChange={(event) => handleUpdateStepField('pollIntervalMs', event.target.value)} />
-                  </label>
-                </div>
-              </>
-            ) : null}
-            {showLoopFields ? (
-              <label className="field-label">
-                <span>loop 动作类型</span>
-                <select value={stepForm.loopActionType} onChange={(event) => handleUpdateStepField('loopActionType', event.target.value)}>
-                  <option value="tap">点击</option>
-                  <option value="drag">拖拽</option>
-                </select>
-              </label>
-            ) : null}
-            {effectiveActionType === 'tap' ? (
-              <div className="subtle-panel-react">
-                <div className="panel-header">
-                  <h2>点击目标</h2>
-                  <span className="panel-meta">引用或像素坐标二选一</span>
-                </div>
-                <label className="field-label">
-                  <span>目标引用</span>
-                  <input value={stepForm.targetRef} onChange={(event) => handleUpdateStepField('targetRef', event.target.value)} placeholder="例如 loginButton" />
-                </label>
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>x 像素</span>
-                    <input value={stepForm.targetX} type="number" onChange={(event) => handleUpdateStepField('targetX', event.target.value)} placeholder="例如 320" />
-                  </label>
-                  <label className="field-label">
-                    <span>y 像素</span>
-                    <input value={stepForm.targetY} type="number" onChange={(event) => handleUpdateStepField('targetY', event.target.value)} placeholder="例如 480" />
-                  </label>
-                </div>
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>x 偏移 px</span>
-                    <input value={stepForm.targetOffsetX} type="number" onChange={(event) => handleUpdateStepField('targetOffsetX', event.target.value)} />
-                  </label>
-                  <label className="field-label">
-                    <span>y 偏移 px</span>
-                    <input value={stepForm.targetOffsetY} type="number" onChange={(event) => handleUpdateStepField('targetOffsetY', event.target.value)} />
-                  </label>
-                </div>
-              </div>
-            ) : null}
-            {effectiveActionType === 'drag' ? (
-              <div className="subtle-panel-react">
-                <div className="panel-header">
-                  <h2>拖拽目标</h2>
-                  <span className="panel-meta">起点与终点都需要</span>
-                </div>
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>起点引用</span>
-                    <input value={stepForm.fromRef} onChange={(event) => handleUpdateStepField('fromRef', event.target.value)} placeholder="可选" />
-                  </label>
-                  <label className="field-label">
-                    <span>终点引用</span>
-                    <input value={stepForm.toRef} onChange={(event) => handleUpdateStepField('toRef', event.target.value)} placeholder="可选" />
-                  </label>
-                </div>
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>起点 x</span>
-                    <input value={stepForm.fromX} type="number" onChange={(event) => handleUpdateStepField('fromX', event.target.value)} placeholder="例如 320" />
-                  </label>
-                  <label className="field-label">
-                    <span>起点 y</span>
-                    <input value={stepForm.fromY} type="number" onChange={(event) => handleUpdateStepField('fromY', event.target.value)} placeholder="例如 420" />
-                  </label>
-                </div>
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>起点 x 偏移</span>
-                    <input value={stepForm.fromOffsetX} type="number" onChange={(event) => handleUpdateStepField('fromOffsetX', event.target.value)} />
-                  </label>
-                  <label className="field-label">
-                    <span>起点 y 偏移</span>
-                    <input value={stepForm.fromOffsetY} type="number" onChange={(event) => handleUpdateStepField('fromOffsetY', event.target.value)} />
-                  </label>
-                </div>
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>终点 x</span>
-                    <input value={stepForm.toX} type="number" onChange={(event) => handleUpdateStepField('toX', event.target.value)} placeholder="例如 320" />
-                  </label>
-                  <label className="field-label">
-                    <span>终点 y</span>
-                    <input value={stepForm.toY} type="number" onChange={(event) => handleUpdateStepField('toY', event.target.value)} placeholder="例如 620" />
-                  </label>
-                </div>
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>终点 x 偏移</span>
-                    <input value={stepForm.toOffsetX} type="number" onChange={(event) => handleUpdateStepField('toOffsetX', event.target.value)} />
-                  </label>
-                  <label className="field-label">
-                    <span>终点 y 偏移</span>
-                    <input value={stepForm.toOffsetY} type="number" onChange={(event) => handleUpdateStepField('toOffsetY', event.target.value)} />
-                  </label>
-                </div>
-                <div className="form-grid-react compact-grid-react">
-                  <label className="field-label">
-                    <span>按住 ms</span>
-                    <input value={stepForm.holdMs} type="number" onChange={(event) => handleUpdateStepField('holdMs', event.target.value)} />
-                  </label>
-                  <label className="field-label">
-                    <span>移动 ms</span>
-                    <input value={stepForm.durationMs} type="number" onChange={(event) => handleUpdateStepField('durationMs', event.target.value)} />
-                  </label>
-                </div>
-              </div>
-            ) : null}
-            <div className="button-row">
-              <button type="button" className="button-primary" onClick={handleAddStep}>加入动作</button>
-              <button type="button" className="button-secondary" onClick={handleClearSteps} disabled={editorDraft.steps.length === 0}>清空动作</button>
-            </div>
-            <p className="helper-text">{editorStatus}</p>
-          </section>
-
-          <section className="nested-panel-react">
-            <div className="panel-header">
-              <h2>图片模板</h2>
-              <span className="panel-meta">发布时会一起打包</span>
-            </div>
-            <div className="form-grid-react compact-grid-react">
-              <label className="field-label">
-                <span>截图 x</span>
-                <input value={formatCropValue(crop.x)} type="number" min="0" max="1" step="0.01" onChange={(event) => handleCropInputChange('x', event.target.value)} />
-              </label>
-              <label className="field-label">
-                <span>截图 y</span>
-                <input value={formatCropValue(crop.y)} type="number" min="0" max="1" step="0.01" onChange={(event) => handleCropInputChange('y', event.target.value)} />
-              </label>
-            </div>
-            <div className="form-grid-react compact-grid-react">
-              <label className="field-label">
-                <span>宽</span>
-                <input value={formatCropValue(crop.width)} type="number" min="0.02" max="1" step="0.01" onChange={(event) => handleCropInputChange('width', event.target.value)} />
-              </label>
-              <label className="field-label">
-                <span>高</span>
-                <input value={formatCropValue(crop.height)} type="number" min="0.02" max="1" step="0.01" onChange={(event) => handleCropInputChange('height', event.target.value)} />
-              </label>
-            </div>
-            <div className="form-grid-react compact-grid-react">
-              <label className="field-label">
-                <span>Asset ID</span>
-                <input value={assetDraftId} onChange={(event) => setAssetDraftId(event.target.value)} placeholder="例如 login-icon" />
-              </label>
-              <label className="field-label">
-                <span>上传图片</span>
-                <input type="file" accept="image/*" onChange={handleAssetFileChange} />
-              </label>
-            </div>
-            <div className="button-row">
-              <button type="button" className="button-secondary" onClick={handleCaptureAssetFromVideo} disabled={!viewer.remoteStream}>
-                从当前画面截取模板
-              </button>
-            </div>
-            <div className="asset-gallery-react">
-              {editorDraft.images.map((asset) => (
-                <article className="asset-card-react" key={asset.assetId}>
-                  <img src={asset.dataUrl} alt={asset.assetId} />
-                  <footer>
-                    <strong>{asset.assetId}</strong>
-                    <button type="button" className="button-tertiary danger-text" onClick={() => handleRemoveAsset(asset.assetId)}>移除</button>
-                  </footer>
-                </article>
-              ))}
-              {editorDraft.images.length === 0 ? <p className="muted-text">还没有图片模板，可先上传 PNG/JPG。</p> : null}
-            </div>
-            <div className="panel-header">
-              <h2>动作列表</h2>
-              <span className="panel-meta">支持上移、下移、删除</span>
-            </div>
-            <div className="step-list">
-              {editorDraft.steps.map((step, index) => (
-                <article className="step-card" key={step.id || `${step.type}-${index}`}>
-                  <div className="step-card-head">
-                    <strong>{index + 1}. {step.id || '未命名步骤'}</strong>
-                    <span className="badge accent">{STEP_TYPE_LABELS[step.type] || step.type}</span>
-                  </div>
-                  <p className="panel-copy small-copy">{formatStepSummary(step)}</p>
-                  <div className="step-details-react">
-                    {buildStepDetailLines(step).map((line) => <div key={line}>{line}</div>)}
-                  </div>
-                  <div className="inline-button-row-react">
-                    <button type="button" className="button-tertiary" onClick={() => handleMoveStep(index, -1)} disabled={index === 0}>上移</button>
-                    <button type="button" className="button-tertiary" onClick={() => handleMoveStep(index, 1)} disabled={index === editorDraft.steps.length - 1}>下移</button>
-                    <button type="button" className="button-tertiary danger-text" onClick={() => handleRemoveStep(index)}>删除</button>
-                  </div>
-                </article>
-              ))}
-              {editorDraft.steps.length === 0 ? <p className="muted-text">还没有动作，可先在左侧添加步骤。</p> : null}
-            </div>
-          </section>
-
-          <section className="nested-panel-react">
-            <div className="panel-header">
-              <h2>JSON 预览</h2>
-              <span className="panel-meta">发布前检查结构</span>
-            </div>
-            <textarea className="code-preview-react" readOnly value={editorPreview} />
-            <div className="button-row">
-              <button type="button" className="button-primary" onClick={handlePublishPackage} disabled={isPublishing}>
-                {isPublishing ? '发布中...' : '发布新 revision'}
-              </button>
-              <button type="button" className="button-secondary" onClick={handleLoadDetailIntoEditor} disabled={!detail || detailLoading}>
-                用当前选中 revision 覆盖草稿
-              </button>
-            </div>
-            <p className={publishStatus.includes('失败') ? 'error-text' : 'helper-text'}>{publishStatus}</p>
-            {publishDownloadUrl ? (
-              <div className="button-row">
-                <a className="button-secondary link-button" href={publishDownloadUrl} target="_blank" rel="noreferrer">
-                  下载刚发布的 ZIP
-                </a>
-              </div>
-            ) : null}
-          </section>
-        </div>
-      </section>
     </div>
   );
 }

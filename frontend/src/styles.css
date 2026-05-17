@@ -47,15 +47,15 @@ textarea {
 .app-shell {
   width: min(1440px, calc(100% - 28px));
   margin: 0 auto;
-  padding: 22px 0 40px;
+  padding: 16px 0 28px;
 }
 
 .app-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 18px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .app-header h1,
@@ -94,13 +94,13 @@ textarea {
 }
 
 .small-copy {
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .app-nav {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -109,7 +109,7 @@ textarea {
 .package-card {
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   background: rgba(255, 255, 255, 0.72);
   text-decoration: none;
   transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
@@ -131,11 +131,11 @@ textarea {
 
 .page-grid {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .page-grid-workbench {
-  grid-template-columns: 320px minmax(420px, 1fr) 360px;
+  grid-template-columns: 1fr;
 }
 
 .page-grid-debug {
@@ -150,7 +150,20 @@ textarea {
 
 .viewer-panel-react {
   display: grid;
-  gap: 14px;
+  gap: 10px;
+}
+
+.workbench-top-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workbench-main-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 3fr);
+  gap: 10px;
+  align-items: start;
 }
 
 .connection-panel-react,
@@ -159,19 +172,62 @@ textarea {
   align-content: start;
 }
 
+.collapsible-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.collapsible-summary {
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 14px 16px;
+}
+
+.collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.collapsible-title {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.collapse-indicator {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.collapsible-body {
+  padding: 0 16px 16px;
+}
+
+.collapsible-panel:not([open]) .collapsible-summary {
+  border-bottom: 0;
+}
+
 .panel {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 24px;
+  border-radius: 18px;
   box-shadow: var(--shadow);
   backdrop-filter: blur(18px);
-  padding: 20px;
+  padding: 14px 16px;
 }
 
 .stack-panel,
 .placeholder-panel {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   align-content: start;
 }
 
@@ -182,24 +238,31 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+}
+
+.panel-header h2 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 600;
 }
 
 .status-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .status-chip,
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 11px;
+  gap: 5px;
+  padding: 5px 9px;
   border-radius: 999px;
-  font-size: 13px;
+  font-size: 12px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.72);
 }
@@ -223,16 +286,16 @@ textarea {
 
 .field-label {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .field-label input {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border-radius: 10px;
+  padding: 8px 10px;
   background: rgba(255, 255, 255, 0.88);
   color: var(--ink);
 }
@@ -241,24 +304,24 @@ textarea {
 .field-label textarea {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border-radius: 10px;
+  padding: 8px 10px;
   background: rgba(255, 255, 255, 0.88);
   color: var(--ink);
 }
 
 .field-label textarea {
   resize: vertical;
-  min-height: 108px;
+  min-height: 84px;
 }
 
 .field-label input[type="file"] {
-  padding: 10px 12px;
+  padding: 7px 9px;
 }
 
 .button-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -266,8 +329,9 @@ textarea {
 .button-secondary {
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 10px 16px;
+  padding: 8px 12px;
   cursor: pointer;
+  font-size: 13px;
 }
 
 .link-button {
@@ -275,6 +339,16 @@ textarea {
   align-items: center;
   justify-content: center;
   text-decoration: none;
+}
+
+.workspace-editor-panel {
+  min-width: 0;
+  grid-column: 2;
+}
+
+.workspace-frame-panel {
+  min-width: 0;
+  grid-column: 1;
 }
 
 .button-primary {
@@ -289,10 +363,11 @@ textarea {
 .button-tertiary {
   border: 0;
   border-radius: 999px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   cursor: pointer;
   background: rgba(24, 32, 42, 0.06);
   color: var(--ink);
+  font-size: 12px;
 }
 
 .button-primary:disabled,
@@ -306,23 +381,23 @@ textarea {
 .package-list,
 .step-list {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .room-card,
 .step-card {
-  border-radius: 18px;
+  border-radius: 14px;
   border: 1px solid var(--line);
   background: var(--surface-strong);
-  padding: 14px;
+  padding: 10px 12px;
 }
 
 .package-card {
   width: 100%;
   text-align: left;
-  border-radius: 18px;
+  border-radius: 14px;
   cursor: pointer;
-  padding: 14px;
+  padding: 10px 12px;
 }
 
 .package-card.selected {
@@ -332,14 +407,14 @@ textarea {
 
 .key-value-list {
   display: grid;
-  gap: 10px;
-  margin: 14px 0 0;
+  gap: 8px;
+  margin: 10px 0 0;
 }
 
 .key-value-list div {
   display: grid;
   grid-template-columns: 104px 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .compact-list div {
@@ -354,20 +429,19 @@ textarea {
 .detail-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.summary-tile {
-  border-radius: 18px;
-  border: 1px solid var(--line);
-  background: var(--surface-strong);
-  padding: 14px;
-  display: grid;
   gap: 8px;
 }
 
+.summary-tile {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  /* display: grid; */
+  gap: 4px;
+}
+
 .summary-label {
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .error-text {
@@ -377,32 +451,33 @@ textarea {
 .helper-text {
   margin: 0;
   color: var(--muted);
-  line-height: 1.6;
+  line-height: 1.45;
+  font-size: 12px;
 }
 
 .viewer-stage-react {
-  min-height: 72vh;
+  min-height: 62vh;
   display: grid;
   place-items: center;
-  border-radius: 22px;
+  border-radius: 18px;
   background:
     linear-gradient(90deg, rgba(21, 109, 82, 0.08), rgba(15, 90, 211, 0.08)),
     rgba(233, 240, 247, 0.9);
   border: 1px solid rgba(24, 32, 42, 0.08);
-  padding: 14px;
+  padding: 10px;
 }
 
 .video-shell-react {
   position: relative;
-  width: min(420px, 100%);
-  border-radius: 22px;
+  width: min(400px, 100%);
+  border-radius: 18px;
   overflow: hidden;
   background: linear-gradient(180deg, rgba(16, 20, 24, 0.92), rgba(28, 34, 39, 0.92));
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .video-shell-react.empty {
-  min-height: min(76vh, 760px);
+  min-height: min(66vh, 660px);
 }
 
 .video-shell-react.live {
@@ -413,7 +488,7 @@ textarea {
   display: block;
   width: 100%;
   height: auto;
-  max-height: min(76vh, 760px);
+  max-height: min(66vh, 660px);
   background: #101418;
 }
 
@@ -491,7 +566,7 @@ textarea {
   border-radius: 6px;
   background: rgba(23, 32, 42, 0.82);
   color: white;
-  font-size: 12px;
+  font-size: 11px;
   pointer-events: none;
 }
 
@@ -564,7 +639,7 @@ textarea {
   display: grid;
   place-items: center;
   text-align: center;
-  padding: 24px;
+  padding: 18px;
   color: rgba(255, 255, 255, 0.82);
   background: radial-gradient(circle at top, rgba(15, 90, 211, 0.18), transparent 40%);
 }
@@ -580,42 +655,42 @@ textarea {
 }
 
 .console-panel {
-  min-height: 180px;
-  max-height: 320px;
+  min-height: 120px;
+  max-height: 260px;
   overflow: auto;
   margin: 0;
-  padding: 14px;
-  border-radius: 18px;
+  padding: 10px 12px;
+  border-radius: 14px;
   border: 1px solid rgba(16, 20, 24, 0.08);
   background: rgba(20, 24, 28, 0.94);
   color: rgba(245, 248, 250, 0.92);
   font-family: "SFMono-Regular", Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 11px;
+  line-height: 1.5;
   white-space: pre-wrap;
 }
 
 .compact-console {
-  min-height: 140px;
-  max-height: 220px;
+  min-height: 100px;
+  max-height: 180px;
 }
 
 .debug-frame-stage {
   display: grid;
   place-items: center;
-  min-height: 380px;
-  border-radius: 22px;
+  min-height: 300px;
+  border-radius: 18px;
   border: 1px solid rgba(24, 32, 42, 0.08);
   background:
     radial-gradient(circle at top, rgba(191, 91, 54, 0.12), transparent 28%),
     rgba(244, 239, 231, 0.78);
-  padding: 14px;
+  padding: 10px;
 }
 
 .frame-shell-react {
   position: relative;
   width: 100%;
-  border-radius: 18px;
+  border-radius: 14px;
   overflow: hidden;
   border: 1px solid rgba(24, 32, 42, 0.1);
   background: #101418;
@@ -634,7 +709,7 @@ textarea {
 
 .frame-empty-react {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   text-align: center;
   color: var(--muted);
 }
@@ -661,41 +736,41 @@ textarea {
   left: 0;
   top: 0;
   transform: translateY(-100%);
-  padding: 4px 8px;
+  padding: 3px 6px;
   border-radius: 999px;
   background: rgba(24, 32, 42, 0.84);
   color: rgba(255, 255, 255, 0.94);
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
 .result-grid-react {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 10px;
 }
 
 .table-card-react,
 .nested-panel-react {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .result-table-react {
   width: 100%;
   border-collapse: collapse;
   background: rgba(255, 255, 255, 0.82);
-  border-radius: 16px;
+  border-radius: 12px;
   overflow: hidden;
 }
 
 .result-table-react th,
 .result-table-react td {
-  padding: 12px 14px;
+  padding: 8px 10px;
   text-align: left;
   border-bottom: 1px solid rgba(24, 32, 42, 0.08);
   vertical-align: top;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .result-table-react th {
@@ -712,7 +787,7 @@ textarea {
 }
 
 .calibration-console {
-  min-height: 220px;
+  min-height: 170px;
 }
 
 .calibration-reference-react {
@@ -789,41 +864,56 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.workbench-main-grid > .workspace-frame-panel {
+  grid-column: 1;
+}
+.workbench-main-grid > .workspace-editor-panel {
+  grid-column: 2;
+}
+
 .compact-grid-react {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .package-list-compact {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
 
 .detail-two-column-react {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
-  gap: 14px;
+  gap: 10px;
 }
 
 .step-details-react {
   display: grid;
-  gap: 6px;
-  margin-top: 10px;
+  gap: 4px;
+  margin-top: 6px;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .editor-layout-react {
   display: grid;
-  grid-template-columns: minmax(320px, 0.9fr) minmax(320px, 1fr) minmax(300px, 0.8fr);
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
   align-items: start;
+}
+
+.workspace-editor-panel .editor-layout-react > :last-child {
+  grid-column: 1 / -1;
+}
+
+.workspace-editor-panel .code-preview-react {
+  min-height: 240px;
 }
 
 .subtle-panel-react {
   display: grid;
-  gap: 12px;
-  padding: 14px;
-  border-radius: 18px;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.56);
 }
@@ -831,14 +921,14 @@ textarea {
 .asset-gallery-react {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
+  gap: 8px;
 }
 
 .asset-card-react {
   display: grid;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 18px;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
   border: 1px solid var(--line);
   background: var(--surface-strong);
 }
@@ -848,7 +938,7 @@ textarea {
   width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
-  border-radius: 14px;
+  border-radius: 10px;
   border: 1px solid rgba(24, 32, 42, 0.08);
   background: rgba(20, 24, 28, 0.92);
 }
@@ -857,14 +947,14 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .inline-button-row-react {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .danger-text {
@@ -873,25 +963,30 @@ textarea {
 
 .code-preview-react {
   width: 100%;
-  min-height: 420px;
+  min-height: 320px;
   border: 1px solid rgba(16, 20, 24, 0.08);
-  border-radius: 18px;
+  border-radius: 14px;
   background: rgba(20, 24, 28, 0.94);
   color: rgba(245, 248, 250, 0.92);
   font-family: "SFMono-Regular", Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  padding: 14px;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 10px 12px;
   resize: vertical;
 }
 
 .code-preview-compact-react {
-  min-height: 260px;
+  min-height: 210px;
 }
 
 @media (max-width: 1180px) {
   .page-grid-workbench,
   .page-grid-debug {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench-top-grid,
+  .workbench-main-grid {
     grid-template-columns: 1fr;
   }
 
@@ -915,23 +1010,23 @@ textarea {
   }
 
   .viewer-stage-react {
-    min-height: 56vh;
+    min-height: 50vh;
   }
 
   .video-shell-react.empty {
-    min-height: 60vh;
+    min-height: 52vh;
   }
 }
 
 @media (max-width: 720px) {
   .app-shell {
     width: min(100%, calc(100% - 18px));
-    padding-top: 16px;
+    padding-top: 12px;
   }
 
   .panel {
-    padding: 16px;
-    border-radius: 20px;
+    padding: 12px;
+    border-radius: 16px;
   }
 
   .detail-summary-grid {
