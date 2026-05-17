@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { buildClientSocketUrl, normalizeBaseUrl } from '../lib/network';
+import { buildClientSocketUrl, getDefaultServerBaseUrl, normalizeBaseUrl } from '../lib/network';
 
 function pushLine(lines, nextLine, maxSize = 80) {
   return [nextLine, ...lines].slice(0, maxSize);
@@ -128,7 +128,7 @@ function buildCalibrationReference(message) {
 
 export function useProbeConnection() {
   const [config, setConfig] = useState({
-    serverUrl: typeof window === 'undefined' ? '' : window.location.origin,
+    serverUrl: getDefaultServerBaseUrl(),
     roomId: 'demo-room',
     query: ''
   });

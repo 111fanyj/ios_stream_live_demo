@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { buildClientSocketUrl, normalizeBaseUrl } from '../lib/network';
+import { buildClientSocketUrl, getDefaultServerBaseUrl, normalizeBaseUrl } from '../lib/network';
 
 const MAX_OVERLAY_ITEMS = 40;
 
@@ -154,7 +154,7 @@ export function useViewerConnection() {
   const videoRef = useRef(null);
 
   const [config, setConfig] = useState({
-    serverUrl: typeof window === 'undefined' ? '' : window.location.origin,
+    serverUrl: getDefaultServerBaseUrl(),
     roomId: 'demo-room',
     token: ''
   });

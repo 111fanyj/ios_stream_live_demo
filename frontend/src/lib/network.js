@@ -1,7 +1,20 @@
+export function getDefaultServerBaseUrl() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  const { protocol, hostname, origin, port } = window.location;
+  if (port === '5173') {
+    return `${protocol}//${hostname}:3000`;
+  }
+
+  return origin;
+}
+
 export function normalizeBaseUrl(baseUrl) {
   const rawValue = String(baseUrl || '').trim();
   if (!rawValue) {
-    return window.location.origin;
+    return getDefaultServerBaseUrl();
   }
 
   return rawValue.replace(/\/$/, '');
