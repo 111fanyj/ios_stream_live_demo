@@ -15,6 +15,13 @@ private struct RemoteImageMatch {
     let point: AutomationPoint
     let score: Double
     let scaleMultiplier: Double
+    let bounds: [String: Double]
+}
+
+private struct RemoteImageMatchPosition {
+    let x: Int
+    let y: Int
+    let score: Double
 }
 
 private struct RemoteRecognizedText {
@@ -69,12 +76,12 @@ final class RemoteAutomationInspector {
         }
 
         switch step.type {
-        case "waitForText":
+        case "waitForText", "loopUntilText":
             return [
                 "itemType": step.type,
-                "ocrCandidates": collectTextCandidates(pixelBuffer: pixelBuffer, preferredQuery: step.query)
+                "ocrCandidates": collectTextCandidates(pixelBuffer: pixelBuffer, preferredQueries: collectTextQueries(step: step))
             ]
-        case "waitForImage":
+        case "waitForImage", "loopUntilImage":
             var payload: [String: Any] = [
                 "itemType": step.type
             ]
@@ -85,7 +92,8 @@ final class RemoteAutomationInspector {
                         "y": match.point.y
                     ],
                     "score": match.score,
-                    "scaleMultiplier": match.scaleMultiplier
+                    "scaleMultiplier": match.scaleMultiplier,
+                    "bounds": match.bounds
                 ]
             }
             return payload
@@ -96,7 +104,10 @@ final class RemoteAutomationInspector {
 
     func makeDebugOCRPayload(pixelBuffer: CVPixelBuffer, query: String?) -> [String: Any] {
         let normalizedQuery = (query ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let recognizedTexts = collectRecognizedTexts(pixelBuffer: pixelBuffer, preferredQuery: normalizedQuery)
+        let recognizedTexts = collectRecognizedTexts(
+            pixelBuffer: pixelBuffer,
+            preferredQueries: normalizedQuery.isEmpty ? [] : [normalizedQuery]
+        )
         let candidates = recognizedTexts.map { text in
             let matched = normalizedQuery.isEmpty ? true : matchesText(text.text, query: normalizedQuery)
             return [
@@ -120,31 +131,33 @@ final class RemoteAutomationInspector {
         ]
     }
 
-    private func collectTextCandidates(pixelBuffer: CVPixelBuffer, preferredQuery: String?) -> [[String: Any]] {
+    private func collectTextCandidates(pixelBuffer: CVPixelBuffer, preferredQueries: [String]) -> [[String: Any]] {
         var candidates: [[String: Any]] = []
-        for text in collectRecognizedTexts(pixelBuffer: pixelBuffer, preferredQuery: preferredQuery) {
+        for text in collectRecognizedTexts(pixelBuffer: pixelBuffer, preferredQueries: preferredQueries) {
             candidates.append([
                 "text": text.text,
                 "confidence": text.confidence,
                 "point": [
                     "x": text.point.x,
                     "y": text.point.y
-                ]
+                ],
+                "bounds": text.bounds
             ])
         }
 
         return candidates
     }
 
-    private func collectRecognizedTexts(pixelBuffer: CVPixelBuffer, preferredQuery: String?) -> [RemoteRecognizedText] {
+    private func collectRecognizedTexts(pixelBuffer: CVPixelBuffer, preferredQueries: [String]) -> [RemoteRecognizedText] {
         let sourceWidth = Double(max(1, CVPixelBufferGetWidth(pixelBuffer)))
         let sourceHeight = Double(max(1, CVPixelBufferGetHeight(pixelBuffer)))
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
-        if let preferredQuery = normalizedMatchText(preferredQuery), !preferredQuery.isEmpty {
-            request.customWords = [preferredQuery]
+        let customWords = preferredQueries.compactMap(normalizedMatchText)
+        if !customWords.isEmpty {
+            request.customWords = customWords
         }
 
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
@@ -210,6 +223,23 @@ final class RemoteAutomationInspector {
             .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
     }
 
+    private func collectTextQueries(step: AutomationStep) -> [String] {
+        var queries: [String] = []
+        if let query = step.query?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty {
+            queries.append(query)
+        }
+
+        for query in step.queryOptions ?? [] {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || queries.contains(trimmed) {
+                continue
+            }
+            queries.append(trimmed)
+        }
+
+        return queries
+    }
+
     private func findBestImageMatch(step: AutomationStep, pixelBuffer: CVPixelBuffer) throws -> RemoteImageMatch? {
         guard let templateImage = try templateImage(for: step),
               let frameImage = makeCGImage(from: pixelBuffer)
@@ -220,7 +250,7 @@ final class RemoteAutomationInspector {
         let sourceWidth = max(1, CVPixelBufferGetWidth(pixelBuffer))
         let sourceHeight = max(1, CVPixelBufferGetHeight(pixelBuffer))
         let frameLongEdge = max(sourceWidth, sourceHeight)
-        let scale = min(1.0, 320.0 / Double(frameLongEdge))
+        let scale = min(1.0, 384.0 / Double(frameLongEdge))
         let frameWidth = max(2, Int(Double(sourceWidth) * scale))
         let frameHeight = max(2, Int(Double(sourceHeight) * scale))
 
@@ -244,7 +274,6 @@ final class RemoteAutomationInspector {
                 continue
             }
 
-            let scanStep = imageScanStep(for: template)
             let regionX = step.region?.x ?? 0
             let regionY = step.region?.y ?? 0
             let regionWidth = step.region?.width ?? Double(sourceWidth)
@@ -254,30 +283,30 @@ final class RemoteAutomationInspector {
             let maxX = Int(((regionX + regionWidth) / Double(sourceWidth)) * Double(frame.width)) - template.width
             let maxY = Int(((regionY + regionHeight) / Double(sourceHeight)) * Double(frame.height)) - template.height
 
-            var bestScore = -Double.greatestFiniteMagnitude
-            var bestX = 0
-            var bestY = 0
-            for y in stride(from: max(0, minY), through: max(0, min(frame.height - template.height, maxY)), by: scanStep) {
-                for x in stride(from: max(0, minX), through: max(0, min(frame.width - template.width, maxX)), by: scanStep) {
-                    let score = similarity(frame: frame, template: template, originX: x, originY: y)
-                    if score > bestScore {
-                        bestScore = score
-                        bestX = x
-                        bestY = y
-                    }
-                }
-            }
-
-            guard bestScore > -Double.greatestFiniteMagnitude else {
+            guard let bestPosition = findBestMatchPosition(
+                frame: frame,
+                template: template,
+                minX: minX,
+                minY: minY,
+                maxX: maxX,
+                maxY: maxY
+            ) else {
                 continue
             }
 
-            let centerX = ((Double(bestX) + Double(template.width) / 2.0) / Double(frame.width)) * Double(sourceWidth)
-            let centerY = ((Double(bestY) + Double(template.height) / 2.0) / Double(frame.height)) * Double(sourceHeight)
+            let centerX = ((Double(bestPosition.x) + Double(template.width) / 2.0) / Double(frame.width)) * Double(sourceWidth)
+            let centerY = ((Double(bestPosition.y) + Double(template.height) / 2.0) / Double(frame.height)) * Double(sourceHeight)
+            let bounds: [String: Double] = [
+                "x": (Double(bestPosition.x) / Double(frame.width)) * Double(sourceWidth),
+                "y": (Double(bestPosition.y) / Double(frame.height)) * Double(sourceHeight),
+                "width": (Double(template.width) / Double(frame.width)) * Double(sourceWidth),
+                "height": (Double(template.height) / Double(frame.height)) * Double(sourceHeight)
+            ]
             let match = RemoteImageMatch(
                 point: AutomationPoint(x: centerX, y: centerY),
-                score: bestScore,
-                scaleMultiplier: candidate.scaleMultiplier
+                score: bestPosition.score,
+                scaleMultiplier: candidate.scaleMultiplier,
+                bounds: bounds
             )
             if bestMatch == nil || match.score > bestMatch!.score {
                 bestMatch = match
@@ -293,7 +322,7 @@ final class RemoteAutomationInspector {
         frameWidth: Int,
         frameHeight: Int
     ) -> [(width: Int, height: Int, scaleMultiplier: Double)] {
-        let scaleMultipliers: [Double] = [0.8, 0.9, 1.0, 1.1, 1.2]
+        let scaleMultipliers: [Double] = [0.85, 0.95, 1.0, 1.05, 1.15]
         var candidates: [(width: Int, height: Int, scaleMultiplier: Double)] = []
         var seenSizes = Set<String>()
 
@@ -315,6 +344,50 @@ final class RemoteAutomationInspector {
         }
 
         return candidates
+    }
+
+    private func findBestMatchPosition(
+        frame: RemoteGrayscaleImage,
+        template: RemoteGrayscaleImage,
+        minX: Int,
+        minY: Int,
+        maxX: Int,
+        maxY: Int
+    ) -> RemoteImageMatchPosition? {
+        let lowerX = max(0, minX)
+        let lowerY = max(0, minY)
+        let upperX = max(0, min(frame.width - template.width, maxX))
+        let upperY = max(0, min(frame.height - template.height, maxY))
+        guard lowerX <= upperX, lowerY <= upperY else {
+            return nil
+        }
+
+        let coarseStep = imageScanStep(for: template)
+        var best = RemoteImageMatchPosition(x: lowerX, y: lowerY, score: -Double.greatestFiniteMagnitude)
+        for y in stride(from: lowerY, through: upperY, by: coarseStep) {
+            for x in stride(from: lowerX, through: upperX, by: coarseStep) {
+                let score = similarity(frame: frame, template: template, originX: x, originY: y)
+                if score > best.score {
+                    best = RemoteImageMatchPosition(x: x, y: y, score: score)
+                }
+            }
+        }
+
+        let refineRadius = max(1, coarseStep * 2)
+        let refineMinX = max(lowerX, best.x - refineRadius)
+        let refineMaxX = min(upperX, best.x + refineRadius)
+        let refineMinY = max(lowerY, best.y - refineRadius)
+        let refineMaxY = min(upperY, best.y + refineRadius)
+        for y in refineMinY...refineMaxY {
+            for x in refineMinX...refineMaxX {
+                let score = similarity(frame: frame, template: template, originX: x, originY: y)
+                if score > best.score {
+                    best = RemoteImageMatchPosition(x: x, y: y, score: score)
+                }
+            }
+        }
+
+        return best
     }
 
     private func imageScanStep(for template: RemoteGrayscaleImage) -> Int {

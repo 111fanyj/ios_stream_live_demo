@@ -25,12 +25,25 @@ struct AutomationTarget: Codable {
     let ref: String?
     let x: Double?
     let y: Double?
+    let offsetX: Double?
+    let offsetY: Double?
+}
+
+struct AutomationEmbeddedAction: Codable {
+    let type: String
+    let target: AutomationTarget?
+    let from: AutomationTarget?
+    let to: AutomationTarget?
+    let holdMs: Int?
+    let durationMs: Int?
+    let postActionDelayMs: Int?
 }
 
 struct AutomationStep: Codable {
     let id: String
     let type: String
     let query: String?
+    let queryOptions: [String]?
     let match: String?
     let timeoutMs: Int?
     let pollIntervalMs: Int?
@@ -44,6 +57,8 @@ struct AutomationStep: Codable {
     let holdMs: Int?
     let durationMs: Int?
     let imageDataURL: String?
+    let action: AutomationEmbeddedAction?
+    let postActionDelayMs: Int?
 }
 
 struct AutomationDocument: Codable {
@@ -58,6 +73,12 @@ private struct GrayscaleImage {
     let width: Int
     let height: Int
     let pixels: [UInt8]
+}
+
+private struct ImageMatchPosition {
+    let x: Int
+    let y: Int
+    let score: Double
 }
 
 final class AutomationRunner {
@@ -139,7 +160,7 @@ final class AutomationRunner {
 
     private func preloadTemplates() {
         let imageDirectory = packageURL.appendingPathComponent("images", isDirectory: true)
-        for step in document.steps where step.type == "waitForImage" {
+        for step in document.steps where step.type == "waitForImage" || step.type == "loopUntilImage" {
             guard let assetId = step.assetId, templates[assetId] == nil else {
                 continue
             }
@@ -206,9 +227,9 @@ final class AutomationRunner {
         lastPollAt = now
 
         let point: AutomationPoint?
-        if step.type == "waitForText" {
+        if step.type == "waitForText" || step.type == "loopUntilText" {
             point = findText(step: step, pixelBuffer: pixelBuffer)
-        } else if step.type == "waitForImage" {
+        } else if step.type == "waitForImage" || step.type == "loopUntilImage" {
             point = findImage(step: step, pixelBuffer: pixelBuffer)
         } else {
             fail(step: step, message: "未知步骤类型 \(step.type)")
@@ -238,7 +259,8 @@ final class AutomationRunner {
     }
 
     private func findText(step: AutomationStep, pixelBuffer: CVPixelBuffer) -> AutomationPoint? {
-        guard let query = step.query, !query.isEmpty else {
+        let queries = collectTextQueries(step: step)
+        guard !queries.isEmpty else {
             return nil
         }
 
@@ -249,7 +271,7 @@ final class AutomationRunner {
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
-        request.customWords = [query]
+        request.customWords = queries
 
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         do {
@@ -261,7 +283,9 @@ final class AutomationRunner {
         for observation in request.results ?? [] {
             let candidates = observation.topCandidates(3)
             guard candidates.contains(where: { candidate in
-                matches(text: candidate.string, query: query, mode: step.match ?? "contains")
+                queries.contains(where: { query in
+                    matches(text: candidate.string, query: query, mode: step.match ?? "contains")
+                })
             }) else {
                 continue
             }
@@ -308,7 +332,7 @@ final class AutomationRunner {
         let sourceWidth = max(1, CVPixelBufferGetWidth(pixelBuffer))
         let sourceHeight = max(1, CVPixelBufferGetHeight(pixelBuffer))
         let frameLongEdge = max(sourceWidth, sourceHeight)
-        let scale = min(1.0, 320.0 / Double(frameLongEdge))
+        let scale = min(1.0, 384.0 / Double(frameLongEdge))
         let frameWidth = max(2, Int(Double(sourceWidth) * scale))
         let frameHeight = max(2, Int(Double(sourceHeight) * scale))
 
@@ -335,7 +359,6 @@ final class AutomationRunner {
                 continue
             }
 
-            let scanStep = imageScanStep(for: template)
             let regionX = step.region?.x ?? 0
             let regionY = step.region?.y ?? 0
             let regionWidth = step.region?.width ?? Double(sourceWidth)
@@ -345,29 +368,26 @@ final class AutomationRunner {
             let maxX = Int(((regionX + regionWidth) / Double(sourceWidth)) * Double(frame.width)) - template.width
             let maxY = Int(((regionY + regionHeight) / Double(sourceHeight)) * Double(frame.height)) - template.height
 
-            var candidateBestScore = -Double.greatestFiniteMagnitude
-            var bestX = 0
-            var bestY = 0
-            for y in stride(from: max(0, minY), through: max(0, min(frame.height - template.height, maxY)), by: scanStep) {
-                for x in stride(from: max(0, minX), through: max(0, min(frame.width - template.width, maxX)), by: scanStep) {
-                    let score = similarity(frame: frame, template: template, originX: x, originY: y)
-                    if score > candidateBestScore {
-                        candidateBestScore = score
-                        bestX = x
-                        bestY = y
-                    }
-                }
-            }
-
-            guard candidateBestScore > bestScore else {
+            guard let bestPosition = findBestImageMatchPosition(
+                frame: frame,
+                template: template,
+                minX: minX,
+                minY: minY,
+                maxX: maxX,
+                maxY: maxY
+            ) else {
                 continue
             }
 
-            bestScore = candidateBestScore
+            guard bestPosition.score > bestScore else {
+                continue
+            }
+
+            bestScore = bestPosition.score
             let templateHalfWidth = Double(template.width) / 2.0
             let templateHalfHeight = Double(template.height) / 2.0
-            let centerXInScaledFrame = (Double(bestX) + templateHalfWidth) / Double(frame.width)
-            let centerYInScaledFrame = (Double(bestY) + templateHalfHeight) / Double(frame.height)
+            let centerXInScaledFrame = (Double(bestPosition.x) + templateHalfWidth) / Double(frame.width)
+            let centerYInScaledFrame = (Double(bestPosition.y) + templateHalfHeight) / Double(frame.height)
             let centerX = centerXInScaledFrame * Double(sourceWidth)
             let centerY = centerYInScaledFrame * Double(sourceHeight)
             bestPoint = AutomationPoint(x: centerX, y: centerY)
@@ -386,7 +406,7 @@ final class AutomationRunner {
         frameWidth: Int,
         frameHeight: Int
     ) -> [(width: Int, height: Int)] {
-        let scaleMultipliers: [Double] = [0.8, 0.9, 1.0, 1.1, 1.2]
+        let scaleMultipliers: [Double] = [0.85, 0.95, 1.0, 1.05, 1.15]
         var candidates: [(width: Int, height: Int)] = []
         var seenSizes = Set<String>()
 
@@ -408,6 +428,51 @@ final class AutomationRunner {
         }
 
         return candidates
+    }
+
+    private func findBestImageMatchPosition(
+        frame: GrayscaleImage,
+        template: GrayscaleImage,
+        minX: Int,
+        minY: Int,
+        maxX: Int,
+        maxY: Int
+    ) -> ImageMatchPosition? {
+        let lowerX = max(0, minX)
+        let lowerY = max(0, minY)
+        let upperX = max(0, min(frame.width - template.width, maxX))
+        let upperY = max(0, min(frame.height - template.height, maxY))
+        guard lowerX <= upperX, lowerY <= upperY else {
+            return nil
+        }
+
+        let coarseStep = imageScanStep(for: template)
+        var bestPosition = ImageMatchPosition(x: lowerX, y: lowerY, score: -Double.greatestFiniteMagnitude)
+
+        for y in stride(from: lowerY, through: upperY, by: coarseStep) {
+            for x in stride(from: lowerX, through: upperX, by: coarseStep) {
+                let score = similarity(frame: frame, template: template, originX: x, originY: y)
+                if score > bestPosition.score {
+                    bestPosition = ImageMatchPosition(x: x, y: y, score: score)
+                }
+            }
+        }
+
+        let refineRadius = max(1, coarseStep * 2)
+        let refineMinX = max(lowerX, bestPosition.x - refineRadius)
+        let refineMaxX = min(upperX, bestPosition.x + refineRadius)
+        let refineMinY = max(lowerY, bestPosition.y - refineRadius)
+        let refineMaxY = min(upperY, bestPosition.y + refineRadius)
+        for y in refineMinY...refineMaxY {
+            for x in refineMinX...refineMaxX {
+                let score = similarity(frame: frame, template: template, originX: x, originY: y)
+                if score > bestPosition.score {
+                    bestPosition = ImageMatchPosition(x: x, y: y, score: score)
+                }
+            }
+        }
+
+        return bestPosition
     }
 
     private func imageScanStep(for template: GrayscaleImage) -> Int {
@@ -495,15 +560,35 @@ final class AutomationRunner {
             return nil
         }
 
+        let offsetX = target.offsetX ?? 0
+        let offsetY = target.offsetY ?? 0
+
         if let ref = target.ref, let point = variables[ref] {
-            return point
+            return AutomationPoint(x: point.x + offsetX, y: point.y + offsetY)
         }
 
         guard let x = target.x, let y = target.y else {
             return nil
         }
 
-        return AutomationPoint(x: x, y: y)
+        return AutomationPoint(x: x + offsetX, y: y + offsetY)
+    }
+
+    private func collectTextQueries(step: AutomationStep) -> [String] {
+        var queries: [String] = []
+        if let query = step.query?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty {
+            queries.append(query)
+        }
+
+        for query in step.queryOptions ?? [] {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || queries.contains(trimmed) {
+                continue
+            }
+            queries.append(trimmed)
+        }
+
+        return queries
     }
 
     private func emitTap(step: AutomationStep, point: AutomationPoint) {

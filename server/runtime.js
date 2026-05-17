@@ -391,11 +391,26 @@ function resolveAutomationTarget(session, target) {
     return null;
   }
 
+  const offsetX = Number(target.offsetX ?? 0);
+  const offsetY = Number(target.offsetY ?? 0);
+
+  const applyOffset = (point) => {
+    const parsedPoint = parsePixelPoint(point);
+    if (!parsedPoint) {
+      return null;
+    }
+
+    return {
+      x: parsedPoint.x + (Number.isFinite(offsetX) ? offsetX : 0),
+      y: parsedPoint.y + (Number.isFinite(offsetY) ? offsetY : 0)
+    };
+  };
+
   if (typeof target.ref === 'string' && target.ref) {
-    return parsePixelPoint(session.variables[target.ref]);
+    return applyOffset(session.variables[target.ref]);
   }
 
-  return parsePixelPoint(target);
+  return applyOffset(target);
 }
 
 function projectFramePointToRawHid(roomId, point) {
@@ -422,11 +437,62 @@ function projectFramePointToRawHid(roomId, point) {
 function collectImageAssetIds(steps) {
   const assetIds = new Set();
   for (const step of steps) {
-    if (step?.type === 'waitForImage' && typeof step.assetId === 'string' && step.assetId) {
+    if ((step?.type === 'waitForImage' || step?.type === 'loopUntilImage') && typeof step.assetId === 'string' && step.assetId) {
       assetIds.add(step.assetId);
     }
   }
   return Array.from(assetIds.values());
+}
+
+function collectTextQueries(step) {
+  const queries = [];
+
+  if (typeof step?.query === 'string' && step.query.trim()) {
+    queries.push(step.query.trim());
+  }
+
+  if (Array.isArray(step?.queryOptions)) {
+    for (const query of step.queryOptions) {
+      if (typeof query !== 'string') {
+        continue;
+      }
+
+      const trimmed = query.trim();
+      if (!trimmed || queries.includes(trimmed)) {
+        continue;
+      }
+
+      queries.push(trimmed);
+    }
+  }
+
+  return queries;
+}
+
+function findMatchedTextQuery(text, queries, mode) {
+  for (const query of queries) {
+    if (matchesText(text, query, mode)) {
+      return query;
+    }
+  }
+
+  return null;
+}
+
+function isTextCheckStep(step) {
+  return step?.type === 'waitForText' || step?.type === 'loopUntilText';
+}
+
+function isImageCheckStep(step) {
+  return step?.type === 'waitForImage' || step?.type === 'loopUntilImage';
+}
+
+function isWaitStep(step) {
+  return isTextCheckStep(step) || isImageCheckStep(step);
+}
+
+function isLoopStep(step) {
+  return step?.type === 'loopUntilText' || step?.type === 'loopUntilImage';
 }
 
 function getAutomationSession(roomId, sessionId) {
@@ -2485,6 +2551,26 @@ async function loadAutomationBundle(packageId, requestedRevision) {
   return { document, imageAssets, metadata, revision };
 }
 
+function buildPackageDetail(bundle) {
+  const revisionEntry = Array.isArray(bundle.metadata?.revisions)
+    ? bundle.metadata.revisions.find((entry) => entry.revision === bundle.revision) ?? null
+    : null;
+
+  return {
+    packageId: bundle.document.packageId,
+    revision: bundle.revision,
+    metadata: bundle.metadata,
+    revisionEntry,
+    automation: bundle.document,
+    images: Object.entries(bundle.imageAssets).map(([assetId, dataUrl]) => ({ assetId, dataUrl }))
+  };
+}
+
+async function readAutomationPackageDetail(packageId, requestedRevision) {
+  const bundle = await loadAutomationBundle(packageId, requestedRevision);
+  return buildPackageDetail(bundle);
+}
+
 function scheduleAutomationStep(session, delayMs) {
   clearAutomationTimer(session);
   session.timer = setTimeout(() => {
@@ -2628,7 +2714,7 @@ function buildCheckStepPayload(session, step) {
     ...step
   };
 
-  if (step.type === 'waitForImage') {
+  if (isImageCheckStep(step)) {
     const imageDataURL = session.imageAssets[step.assetId];
     if (!imageDataURL) {
       throw makeStatusError(`Image asset is unavailable: ${step.assetId || 'unknown'}`, 500);
@@ -2641,8 +2727,11 @@ function buildCheckStepPayload(session, step) {
 
 function selectTextMatch(step, payload) {
   const candidates = Array.isArray(payload?.ocrCandidates) ? payload.ocrCandidates : [];
+  const queries = collectTextQueries(step);
+  const mode = step.match || 'contains';
   for (const candidate of candidates) {
-    if (!matchesText(candidate?.text, step.query, step.match || 'contains')) {
+    const matchedQuery = findMatchedTextQuery(candidate?.text, queries, mode);
+    if (!matchedQuery) {
       continue;
     }
 
@@ -2654,7 +2743,9 @@ function selectTextMatch(step, payload) {
     return {
       point,
       text: String(candidate.text || ''),
-      confidence: Number(candidate.confidence) || 0
+      confidence: Number(candidate.confidence) || 0,
+      matchedQuery,
+      bounds: candidate?.bounds ?? null
     };
   }
 
@@ -2686,8 +2777,117 @@ function selectImageMatch(step, payload) {
   return {
     point,
     score,
-    scaleMultiplier: Number.isFinite(scaleMultiplier) ? scaleMultiplier : null
+    scaleMultiplier: Number.isFinite(scaleMultiplier) ? scaleMultiplier : null,
+    bounds: match.bounds ?? null
   };
+}
+
+function selectStepMatch(step, payload) {
+  if (isTextCheckStep(step)) {
+    return selectTextMatch(step, payload);
+  }
+
+  if (isImageCheckStep(step)) {
+    return selectImageMatch(step, payload);
+  }
+
+  return null;
+}
+
+function dispatchTapStep(session, step, target, options = {}) {
+  const framePoint = resolveAutomationTarget(session, target);
+  if (!framePoint) {
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标不存在`, {
+      stepId: step.id
+    });
+    return false;
+  }
+
+  const point = projectFramePointToRawHid(session.roomId, framePoint);
+  if (!point) {
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标无法转换为 raw HID`, {
+      stepId: step.id
+    });
+    return false;
+  }
+
+  const requestId = dispatchExecutorCommand(session, 'tap', { point }, {
+    stepId: step.id,
+    timeoutMs: 15_000,
+    nextDelayMs: Number(options.nextDelayMs ?? step.postActionDelayMs) || 350
+  });
+  broadcastAutomationAction(session, step, 'tap', { point, framePoint, requestId });
+  return true;
+}
+
+function dispatchDragStep(session, step, fromTarget, toTarget, options = {}) {
+  const frameFrom = resolveAutomationTarget(session, fromTarget);
+  const frameTo = resolveAutomationTarget(session, toTarget);
+  if (!frameFrom || !frameTo) {
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标不存在`, {
+      stepId: step.id
+    });
+    return false;
+  }
+
+  const from = projectFramePointToRawHid(session.roomId, frameFrom);
+  const to = projectFramePointToRawHid(session.roomId, frameTo);
+  if (!from || !to) {
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标无法转换为 raw HID`, {
+      stepId: step.id
+    });
+    return false;
+  }
+
+  const command = {
+    from,
+    to,
+    holdMs: Number(options.holdMs ?? step.holdMs) || 120,
+    durationMs: Number(options.durationMs ?? step.durationMs) || 450
+  };
+  const requestId = dispatchExecutorCommand(session, 'drag', command, {
+    stepId: step.id,
+    timeoutMs: Math.max(15_000, command.durationMs + command.holdMs + 5_000),
+    nextDelayMs: Number(options.nextDelayMs ?? step.postActionDelayMs) || 500
+  });
+  broadcastAutomationAction(session, step, 'drag', {
+    frameFrom,
+    frameTo,
+    ...command,
+    requestId
+  });
+  return true;
+}
+
+function dispatchLoopAction(session, step) {
+  const action = step?.action;
+  if (!action || typeof action !== 'object') {
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 缺少 loop 动作定义`, {
+      stepId: step.id,
+      sendStopCommand: false
+    });
+    return false;
+  }
+
+  if (action.type === 'tap') {
+    return dispatchTapStep(session, step, action.target, {
+      nextDelayMs: Number(action.postActionDelayMs ?? step.postActionDelayMs ?? step.pollIntervalMs) || 350
+    });
+  }
+
+  if (action.type === 'drag') {
+    return dispatchDragStep(session, step, action.from, action.to, {
+      holdMs: action.holdMs,
+      durationMs: action.durationMs,
+      nextDelayMs: Number(action.postActionDelayMs ?? step.postActionDelayMs ?? step.pollIntervalMs) || 500
+    });
+  }
+
+  finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的 loop 动作类型不支持: ${action.type || 'unknown'}`, {
+    stepId: step.id,
+    sendStopCommand: false
+  });
+  return false;
 }
 
 function handleCheckNextItemResult(session, payload, responseStepId) {
@@ -2706,14 +2906,11 @@ function handleCheckNextItemResult(session, payload, responseStepId) {
     : { stepId: step.id, startedAt: Date.now(), attempts: 0 };
   session.waitState = waitState;
 
-  let matched = null;
-  if (step.type === 'waitForText') {
-    matched = selectTextMatch(step, payload);
-  } else if (step.type === 'waitForImage') {
-    matched = selectImageMatch(step, payload);
-  } else {
+  if (!isWaitStep(step)) {
     throw makeStatusError(`Unsupported wait step type: ${step.type}`, 400);
   }
+
+  const matched = selectStepMatch(step, payload);
 
   if (matched) {
     if (step.saveAs) {
@@ -2733,7 +2930,7 @@ function handleCheckNextItemResult(session, payload, responseStepId) {
   const timeoutMs = Number(step.timeoutMs) || 10_000;
   const pollIntervalMs = Number(step.pollIntervalMs) || 500;
   const elapsedMs = Date.now() - waitState.startedAt;
-  const threshold = step.type === 'waitForImage'
+  const threshold = isImageCheckStep(step)
     ? Number(step.threshold ?? 0.84)
     : undefined;
   if (elapsedMs >= timeoutMs) {
@@ -2747,6 +2944,20 @@ function handleCheckNextItemResult(session, payload, responseStepId) {
         payload
       }
     });
+    return;
+  }
+
+  if (isLoopStep(step)) {
+    broadcastAutomationStatus(session, 'polling', `步骤 ${step.id} 未命中，执行 loop 动作`, {
+      stepId: step.id,
+      detail: {
+        attempts: waitState.attempts,
+        elapsedMs,
+        threshold,
+        payload
+      }
+    });
+    dispatchLoopAction(session, step);
     return;
   }
 
@@ -2785,71 +2996,16 @@ function executeAutomationStep(session) {
   }
 
   if (step.type === 'tap') {
-    const framePoint = resolveAutomationTarget(session, step.target);
-    if (!framePoint) {
-      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标不存在`, {
-        stepId: step.id
-      });
-      return;
-    }
-
-    const point = projectFramePointToRawHid(session.roomId, framePoint);
-    if (!point) {
-      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标无法转换为 raw HID`, {
-        stepId: step.id
-      });
-      return;
-    }
-
-    const requestId = dispatchExecutorCommand(session, 'tap', { point }, {
-      stepId: step.id,
-      timeoutMs: 15_000,
-      nextDelayMs: Number(step.postActionDelayMs) || 350
-    });
-    broadcastAutomationAction(session, step, 'tap', { point, framePoint, requestId });
+    dispatchTapStep(session, step, step.target);
     return;
   }
 
   if (step.type === 'drag') {
-    const frameFrom = resolveAutomationTarget(session, step.from);
-    const frameTo = resolveAutomationTarget(session, step.to);
-    if (!frameFrom || !frameTo) {
-      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标不存在`, {
-        stepId: step.id
-      });
-      return;
-    }
-
-    const from = projectFramePointToRawHid(session.roomId, frameFrom);
-    const to = projectFramePointToRawHid(session.roomId, frameTo);
-    if (!from || !to) {
-      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标无法转换为 raw HID`, {
-        stepId: step.id
-      });
-      return;
-    }
-
-    const command = {
-      from,
-      to,
-      holdMs: Number(step.holdMs) || 120,
-      durationMs: Number(step.durationMs) || 450
-    };
-    const requestId = dispatchExecutorCommand(session, 'drag', command, {
-      stepId: step.id,
-      timeoutMs: Math.max(15_000, command.durationMs + command.holdMs + 5_000),
-      nextDelayMs: Number(step.postActionDelayMs) || 500
-    });
-    broadcastAutomationAction(session, step, 'drag', {
-      frameFrom,
-      frameTo,
-      ...command,
-      requestId
-    });
+    dispatchDragStep(session, step, step.from, step.to);
     return;
   }
 
-  if (step.type !== 'waitForText' && step.type !== 'waitForImage') {
+  if (!isWaitStep(step)) {
     finalizeAutomationSession(session.roomId, 'error', `不支持的步骤类型: ${step.type}`, {
       stepId: step.id,
       sendStopCommand: false
@@ -3058,6 +3214,15 @@ function handleExecutorResult(roomId, message) {
     return;
   }
 
+  if (isLoopStep(step)) {
+    broadcastAutomationStatus(session, 'running', `循环动作 ${message.action} 已完成，继续检查`, {
+      stepId: step.id,
+      detail: message.payload || null
+    });
+    scheduleAutomationStep(session, Number(step.pollIntervalMs) || pendingCommand.nextDelayMs || 0);
+    return;
+  }
+
   broadcastAutomationStatus(session, 'running', `动作 ${message.action} 已完成`, {
     stepId: step.id,
     detail: message.payload || null
@@ -3156,6 +3321,8 @@ module.exports = {
   writeJSON,
   listPackageIds,
   readPackageMetadata,
+  loadAutomationBundle,
+  readAutomationPackageDetail,
   saveAutomationPackage,
   startAutomationSession,
   stopAutomationSession,

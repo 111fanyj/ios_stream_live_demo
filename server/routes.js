@@ -9,6 +9,7 @@ function registerRoutes(app, runtime) {
     getCalibrationSummary,
     listPackageIds,
     readPackageMetadata,
+    readAutomationPackageDetail,
     saveAutomationPackage,
     sanitizePackageId,
     writeJSON,
@@ -71,6 +72,22 @@ function registerRoutes(app, runtime) {
       }
   
       res.json(metadata);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/automation/packages/:packageId/revisions/:revision', async (req, res, next) => {
+    try {
+      const packageId = sanitizePackageId(req.params.packageId);
+      const revision = Number(req.params.revision);
+      if (!packageId || !Number.isInteger(revision) || revision < 1) {
+        res.status(400).json({ error: 'Invalid packageId or revision' });
+        return;
+      }
+
+      const detail = await readAutomationPackageDetail(packageId, revision);
+      res.json(detail);
     } catch (error) {
       next(error);
     }

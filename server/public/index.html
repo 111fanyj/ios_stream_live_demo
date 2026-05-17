@@ -254,6 +254,14 @@
         box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.12);
       }
 
+      .overlay-rect {
+        position: absolute;
+        border: 2px solid var(--accent-2);
+        border-radius: 8px;
+        background: rgba(37, 99, 235, 0.12);
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
+      }
+
       .overlay-label {
         position: absolute;
         transform: translate(10px, -26px);
@@ -396,6 +404,40 @@
         background: #fbfcfe;
       }
 
+      .step-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .step-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .step-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: #eef4ff;
+        color: #1d4ed8;
+        font-size: 12px;
+      }
+
+      .step-details {
+        display: grid;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .step-details strong {
+        color: var(--ink);
+      }
+
       .step-actions {
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
@@ -450,6 +492,35 @@
         object-fit: contain;
         border-radius: 6px;
         background: #eef2f6;
+      }
+
+      .asset-thumb span {
+        word-break: break-word;
+      }
+
+      .package-detail {
+        display: grid;
+        gap: 10px;
+      }
+
+      .detail-block {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        background: #fbfcfe;
+        display: grid;
+        gap: 8px;
+      }
+
+      .detail-block h4 {
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.45;
       }
 
       pre {
@@ -580,8 +651,20 @@
               <button id="startExecutionButton" type="button">开始执行</button>
               <button id="stopExecutionButton" class="secondary" type="button">停止执行</button>
             </div>
+            <div class="row">
+              <button id="viewPackageButton" class="secondary" type="button">查看选中 revision</button>
+              <button id="loadPackageIntoEditorButton" class="secondary" type="button">载入到编辑器</button>
+            </div>
             <div id="executionPrereq" class="meta">先连接查看端</div>
             <div id="executionResult" class="meta">未开始执行</div>
+          </section>
+
+          <section>
+            <div class="section-title">
+              <h3>现有方案详情</h3>
+              <span id="packageDetailBadge" class="badge">未加载</span>
+            </div>
+            <div id="packageDetail" class="package-detail">选择方案 revision 后可查看具体步骤、图片模板和 JSON。</div>
           </section>
 
           <div class="row">
@@ -602,6 +685,8 @@
               <select id="stepTypeInput">
                 <option value="waitForText">按文字识别</option>
                 <option value="waitForImage">按图片识别</option>
+                <option value="loopUntilText">循环查文字直到命中</option>
+                <option value="loopUntilImage">循环查图片直到命中</option>
                 <option value="tap">点击</option>
                 <option value="drag">按下移动抬起</option>
               </select>
@@ -613,9 +698,10 @@
 
             <div id="waitFields">
               <label>
-                文字
-                <input id="queryInput" placeholder="例如 登录" />
+                文字查询
+                <textarea id="queryInput" rows="3" placeholder="每行一个候选文字，例如&#10;登录&#10;立即开始"></textarea>
               </label>
+              <div class="hint">按数组顺序依次匹配，命中后会返回具体命中了哪一项。</div>
               <label>
                 图片 Asset ID
                 <input id="assetIdInput" placeholder="例如 login-icon" />
@@ -642,6 +728,17 @@
               </div>
             </div>
 
+            <div id="loopFields" hidden>
+              <label>
+                loop 动作类型
+                <select id="loopActionTypeInput">
+                  <option value="tap">点击</option>
+                  <option value="drag">拖拽</option>
+                </select>
+              </label>
+              <div class="hint">每轮先检查目标是否出现，未命中时执行这里配置的动作，然后继续检查。</div>
+            </div>
+
             <div id="tapFields" hidden>
               <label>
                 目标引用
@@ -649,12 +746,22 @@
               </label>
               <div class="row">
                 <label>
-                  x
-                  <input id="targetXInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                  x 像素
+                  <input id="targetXInput" type="number" step="1" placeholder="例如 320" />
                 </label>
                 <label>
-                  y
-                  <input id="targetYInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                  y 像素
+                  <input id="targetYInput" type="number" step="1" placeholder="例如 480" />
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  x 偏移 px
+                  <input id="targetOffsetXInput" type="number" step="1" value="0" />
+                </label>
+                <label>
+                  y 偏移 px
+                  <input id="targetOffsetYInput" type="number" step="1" value="0" />
                 </label>
               </div>
             </div>
@@ -672,22 +779,42 @@
               </div>
               <div class="row">
                 <label>
-                  起点 x
-                  <input id="fromXInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                  起点 x 像素
+                  <input id="fromXInput" type="number" step="1" placeholder="例如 320" />
                 </label>
                 <label>
-                  起点 y
-                  <input id="fromYInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                  起点 y 像素
+                  <input id="fromYInput" type="number" step="1" placeholder="例如 420" />
                 </label>
               </div>
               <div class="row">
                 <label>
-                  终点 x
-                  <input id="toXInput" type="number" min="0" max="1" step="0.01" value="0.5" />
+                  起点 x 偏移 px
+                  <input id="fromOffsetXInput" type="number" step="1" value="0" />
                 </label>
                 <label>
-                  终点 y
-                  <input id="toYInput" type="number" min="0" max="1" step="0.01" value="0.75" />
+                  起点 y 偏移 px
+                  <input id="fromOffsetYInput" type="number" step="1" value="0" />
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  终点 x 像素
+                  <input id="toXInput" type="number" step="1" placeholder="例如 320" />
+                </label>
+                <label>
+                  终点 y 像素
+                  <input id="toYInput" type="number" step="1" placeholder="例如 620" />
+                </label>
+              </div>
+              <div class="row">
+                <label>
+                  终点 x 偏移 px
+                  <input id="toOffsetXInput" type="number" step="1" value="0" />
+                </label>
+                <label>
+                  终点 y 偏移 px
+                  <input id="toOffsetYInput" type="number" step="1" value="0" />
                 </label>
               </div>
               <div class="row">
@@ -793,11 +920,17 @@
       const executionRevisionSelect = document.getElementById('executionRevisionSelect');
       const startExecutionButton = document.getElementById('startExecutionButton');
       const stopExecutionButton = document.getElementById('stopExecutionButton');
+      const viewPackageButton = document.getElementById('viewPackageButton');
+      const loadPackageIntoEditorButton = document.getElementById('loadPackageIntoEditorButton');
       const executionPrereq = document.getElementById('executionPrereq');
       const executionResult = document.getElementById('executionResult');
+      const packageDetailBadge = document.getElementById('packageDetailBadge');
+      const packageDetail = document.getElementById('packageDetail');
       const stepTypeInput = document.getElementById('stepTypeInput');
       const stepIdInput = document.getElementById('stepIdInput');
       const waitFields = document.getElementById('waitFields');
+      const loopFields = document.getElementById('loopFields');
+      const loopActionTypeInput = document.getElementById('loopActionTypeInput');
       const tapFields = document.getElementById('tapFields');
       const dragFields = document.getElementById('dragFields');
       const queryInput = document.getElementById('queryInput');
@@ -809,12 +942,18 @@
       const targetRefInput = document.getElementById('targetRefInput');
       const targetXInput = document.getElementById('targetXInput');
       const targetYInput = document.getElementById('targetYInput');
+      const targetOffsetXInput = document.getElementById('targetOffsetXInput');
+      const targetOffsetYInput = document.getElementById('targetOffsetYInput');
       const fromRefInput = document.getElementById('fromRefInput');
       const toRefInput = document.getElementById('toRefInput');
       const fromXInput = document.getElementById('fromXInput');
       const fromYInput = document.getElementById('fromYInput');
+      const fromOffsetXInput = document.getElementById('fromOffsetXInput');
+      const fromOffsetYInput = document.getElementById('fromOffsetYInput');
       const toXInput = document.getElementById('toXInput');
       const toYInput = document.getElementById('toYInput');
+      const toOffsetXInput = document.getElementById('toOffsetXInput');
+      const toOffsetYInput = document.getElementById('toOffsetYInput');
       const holdInput = document.getElementById('holdInput');
       const durationInput = document.getElementById('durationInput');
       const addStepButton = document.getElementById('addStepButton');
@@ -845,6 +984,7 @@
       let assets = [];
       let cropDrag = null;
       let executionPackages = [];
+      let loadedPackageDetail = null;
       let activeExecutionSessionId = null;
       let isExecutionRunning = false;
       let roomHasPublisher = false;
@@ -1334,38 +1474,209 @@
         return { x, y, width, height };
       }
 
-      function makeTarget(refInput, xInput, yInput) {
-        const ref = refInput.value.trim();
-        if (ref) {
-          return { ref };
-        }
-        return { x: clamp01(xInput.value), y: clamp01(yInput.value) };
+      function parseNumberValue(value, fallback = null) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : fallback;
       }
 
-      function makeAutomationJSON() {
+      function getFrameFallbackPoint() {
+        const width = videoView.videoWidth || 400;
+        const height = videoView.videoHeight || 800;
         return {
-          schemaVersion: 1,
-          packageId: packageIdInput.value.trim() || 'demo',
-          revision: 0,
-          name: packageNameInput.value.trim() || 'Demo Flow',
-          steps,
+          x: Math.round(width / 2),
+          y: Math.round(height / 2),
         };
       }
 
-      function renderEditor() {
-        stepList.innerHTML = '';
-        if (steps.length === 0) {
-          stepList.textContent = '暂无动作';
-        } else {
-          for (const [index, step] of steps.entries()) {
-            const item = document.createElement('div');
-            item.className = 'step-item';
-            item.innerHTML = `
-              <strong>${index + 1}. ${step.id}</strong>
-              <span>${step.type}</span>
-              <code>${JSON.stringify(step)}</code>
-            `;
+      function isTextWaitType(type) {
+        return type === 'waitForText' || type === 'loopUntilText';
+      }
 
+      function isImageWaitType(type) {
+        return type === 'waitForImage' || type === 'loopUntilImage';
+      }
+
+      function isLoopType(type) {
+        return type === 'loopUntilText' || type === 'loopUntilImage';
+      }
+
+      function collectQueryList(rawValue) {
+        return String(rawValue || '')
+          .split(/\r?\n/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+
+      function getStepQueries(step) {
+        const queries = [];
+        if (typeof step?.query === 'string' && step.query.trim()) {
+          queries.push(step.query.trim());
+        }
+        if (Array.isArray(step?.queryOptions)) {
+          for (const query of step.queryOptions) {
+            const trimmed = String(query || '').trim();
+            if (!trimmed || queries.includes(trimmed)) {
+              continue;
+            }
+            queries.push(trimmed);
+          }
+        }
+        return queries;
+      }
+
+      function makeTarget(refInput, xInput, yInput, offsetXInput, offsetYInput) {
+        const ref = refInput.value.trim();
+        const offsetX = parseNumberValue(offsetXInput?.value, 0) || 0;
+        const offsetY = parseNumberValue(offsetYInput?.value, 0) || 0;
+        if (ref) {
+          return {
+            ref,
+            ...(offsetX ? { offsetX } : {}),
+            ...(offsetY ? { offsetY } : {}),
+          };
+        }
+
+        const fallbackPoint = getFrameFallbackPoint();
+        const x = parseNumberValue(xInput.value, fallbackPoint.x);
+        const y = parseNumberValue(yInput.value, fallbackPoint.y);
+        return {
+          x,
+          y,
+          ...(offsetX ? { offsetX } : {}),
+          ...(offsetY ? { offsetY } : {}),
+        };
+      }
+
+      function formatTargetSummary(target) {
+        if (!target) {
+          return '未配置';
+        }
+
+        const segments = [];
+        if (target.ref) {
+          segments.push(`ref ${target.ref}`);
+        } else if (Number.isFinite(Number(target.x)) && Number.isFinite(Number(target.y))) {
+          segments.push(`(${Number(target.x).toFixed(0)}, ${Number(target.y).toFixed(0)}) px`);
+        }
+
+        const offsetX = Number(target.offsetX);
+        const offsetY = Number(target.offsetY);
+        if (Number.isFinite(offsetX) || Number.isFinite(offsetY)) {
+          segments.push(`偏移 (${Number.isFinite(offsetX) ? offsetX.toFixed(0) : '0'}, ${Number.isFinite(offsetY) ? offsetY.toFixed(0) : '0'}) px`);
+        }
+
+        return segments.join(' / ') || '未配置';
+      }
+
+      function formatStepTypeLabel(type) {
+        const map = {
+          waitForText: '查文字',
+          waitForImage: '查图片',
+          loopUntilText: '循环查文字',
+          loopUntilImage: '循环查图片',
+          tap: '点击',
+          drag: '拖拽',
+        };
+        return map[type] || type || '未知';
+      }
+
+      function buildStepDetailLines(step) {
+        const lines = [];
+        if (isTextWaitType(step.type)) {
+          const queries = getStepQueries(step);
+          lines.push(`查询: ${queries.length > 0 ? queries.join(' | ') : '未配置'}`);
+          lines.push(`匹配: ${step.match || 'contains'} / 超时 ${Number(step.timeoutMs || 10000)} ms / 轮询 ${Number(step.pollIntervalMs || 500)} ms`);
+          if (step.saveAs) {
+            lines.push(`保存命中点: ${step.saveAs}`);
+          }
+        }
+
+        if (isImageWaitType(step.type)) {
+          lines.push(`模板: ${step.assetId || '未配置'} / 阈值 ${Number(step.threshold ?? 0.84).toFixed(2)}`);
+          lines.push(`超时 ${Number(step.timeoutMs || 10000)} ms / 轮询 ${Number(step.pollIntervalMs || 500)} ms`);
+          if (step.saveAs) {
+            lines.push(`保存命中点: ${step.saveAs}`);
+          }
+        }
+
+        if (step.type === 'tap') {
+          lines.push(`点击目标: ${formatTargetSummary(step.target)}`);
+        }
+
+        if (step.type === 'drag') {
+          lines.push(`起点: ${formatTargetSummary(step.from)}`);
+          lines.push(`终点: ${formatTargetSummary(step.to)}`);
+          lines.push(`hold ${Number(step.holdMs || 120)} ms / drag ${Number(step.durationMs || 450)} ms`);
+        }
+
+        if (isLoopType(step.type) && step.action) {
+          lines.push(`loop 动作: ${formatStepTypeLabel(step.action.type)}`);
+          if (step.action.type === 'tap') {
+            lines.push(`loop 目标: ${formatTargetSummary(step.action.target)}`);
+          }
+          if (step.action.type === 'drag') {
+            lines.push(`loop 起点: ${formatTargetSummary(step.action.from)}`);
+            lines.push(`loop 终点: ${formatTargetSummary(step.action.to)}`);
+            lines.push(`loop hold ${Number(step.action.holdMs || 120)} ms / drag ${Number(step.action.durationMs || 450)} ms`);
+          }
+        }
+
+        return lines;
+      }
+
+      function renderAssetCollection(container, assetItems, emptyText) {
+        container.innerHTML = '';
+        if (!Array.isArray(assetItems) || assetItems.length === 0) {
+          container.textContent = emptyText;
+          return;
+        }
+
+        for (const asset of assetItems) {
+          const row = document.createElement('div');
+          row.className = 'asset-thumb';
+
+          const image = document.createElement('img');
+          image.alt = asset.assetId;
+          image.src = asset.dataUrl;
+          const label = document.createElement('span');
+          label.textContent = asset.assetId;
+
+          row.append(image, label);
+          container.append(row);
+        }
+      }
+
+      function renderStepCards(container, items, editable) {
+        container.innerHTML = '';
+        if (!Array.isArray(items) || items.length === 0) {
+          container.textContent = '暂无动作';
+          return;
+        }
+
+        for (const [index, step] of items.entries()) {
+          const item = document.createElement('div');
+          item.className = 'step-item';
+
+          const head = document.createElement('div');
+          head.className = 'step-head';
+          const title = document.createElement('strong');
+          title.textContent = `${index + 1}. ${step.id}`;
+          const chip = document.createElement('span');
+          chip.className = 'step-chip';
+          chip.textContent = formatStepTypeLabel(step.type);
+          head.append(title, chip);
+
+          const detailBox = document.createElement('div');
+          detailBox.className = 'step-details';
+          for (const line of buildStepDetailLines(step)) {
+            const row = document.createElement('div');
+            row.textContent = line;
+            detailBox.append(row);
+          }
+
+          item.append(head, detailBox);
+
+          if (editable) {
             const actions = document.createElement('div');
             actions.className = 'step-actions';
             const up = document.createElement('button');
@@ -1381,7 +1692,7 @@
             down.type = 'button';
             down.className = 'secondary';
             down.textContent = '下移';
-            down.disabled = index === steps.length - 1;
+            down.disabled = index === items.length - 1;
             down.onclick = () => {
               [steps[index + 1], steps[index]] = [steps[index], steps[index + 1]];
               renderEditor();
@@ -1396,28 +1707,90 @@
             };
             actions.append(up, down, remove);
             item.append(actions);
-            stepList.append(item);
           }
+
+          container.append(item);
+        }
+      }
+
+      function renderPackageDetail() {
+        packageDetail.innerHTML = '';
+        if (!loadedPackageDetail) {
+          packageDetailBadge.textContent = '未加载';
+          packageDetail.textContent = '选择方案 revision 后可查看具体步骤、图片模板和 JSON。';
+          return;
         }
 
-        assetList.innerHTML = '';
+        const automation = loadedPackageDetail.automation || {};
+        const revisionEntry = loadedPackageDetail.revisionEntry || {};
+        packageDetailBadge.textContent = `${loadedPackageDetail.packageId} r${loadedPackageDetail.revision}`;
+
+        const summary = document.createElement('div');
+        summary.className = 'detail-block';
+        const summaryTitle = document.createElement('h4');
+        summaryTitle.textContent = automation.name || loadedPackageDetail.packageId;
+        const summaryMeta = document.createElement('div');
+        summaryMeta.className = 'step-details';
+        [`步骤 ${Array.isArray(automation.steps) ? automation.steps.length : 0} 个`, `图片模板 ${Array.isArray(loadedPackageDetail.images) ? loadedPackageDetail.images.length : 0} 张`, revisionEntry.createdAt ? `创建于 ${revisionEntry.createdAt}` : ''].filter(Boolean).forEach((line) => {
+          const row = document.createElement('div');
+          row.textContent = line;
+          summaryMeta.append(row);
+        });
+        summary.append(summaryTitle, summaryMeta);
+
+        const imageBlock = document.createElement('div');
+        imageBlock.className = 'detail-block';
+        const imageTitle = document.createElement('h4');
+        imageTitle.textContent = '图片模板';
+        const imageListBox = document.createElement('div');
+        imageListBox.className = 'asset-list';
+        renderAssetCollection(imageListBox, loadedPackageDetail.images || [], '当前 revision 没有图片模板');
+        imageBlock.append(imageTitle, imageListBox);
+
+        const stepBlock = document.createElement('div');
+        stepBlock.className = 'detail-block';
+        const stepTitle = document.createElement('h4');
+        stepTitle.textContent = '步骤详情';
+        const stepBox = document.createElement('div');
+        stepBox.className = 'step-list';
+        renderStepCards(stepBox, automation.steps || [], false);
+        stepBlock.append(stepTitle, stepBox);
+
+        const jsonBlock = document.createElement('div');
+        jsonBlock.className = 'detail-block';
+        const jsonTitle = document.createElement('h4');
+        jsonTitle.textContent = 'automation.json';
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(automation, null, 2);
+        jsonBlock.append(jsonTitle, pre);
+
+        packageDetail.append(summary, imageBlock, stepBlock, jsonBlock);
+      }
+
+      function makeAutomationJSON() {
+        return {
+          schemaVersion: 1,
+          packageId: packageIdInput.value.trim() || 'demo',
+          revision: 0,
+          name: packageNameInput.value.trim() || 'Demo Flow',
+          steps,
+        };
+      }
+
+      function renderEditor() {
+        renderStepCards(stepList, steps, true);
         assetCount.textContent = `${assets.length} 张`;
-        if (assets.length === 0) {
-          assetList.textContent = '暂无图片模板';
-        } else {
-          for (const asset of assets) {
-            const row = document.createElement('div');
-            row.className = 'asset-thumb';
-            row.innerHTML = `<img alt="${asset.assetId}" src="${asset.dataUrl}" /><span>${asset.assetId}</span>`;
-            assetList.append(row);
-          }
-        }
-
+        renderAssetCollection(assetList, assets, '暂无图片模板');
         jsonPreview.value = JSON.stringify(makeAutomationJSON(), null, 2);
       }
 
       function getSelectedExecutionPackage() {
         return executionPackages.find((item) => item.packageId === executionPackageSelect.value) || null;
+      }
+
+      function getSelectedExecutionRevision() {
+        const revision = Number(executionRevisionSelect.value);
+        return Number.isInteger(revision) && revision > 0 ? revision : null;
       }
 
       function updateExecutionControls() {
@@ -1426,6 +1799,8 @@
         const hasRevision = Boolean(executionRevisionSelect.value);
         startExecutionButton.disabled = !hasSocket || !hasPackage || !hasRevision || !roomHasPublisher || !roomHasExecutor || isExecutionRunning;
         stopExecutionButton.disabled = !hasSocket || !isExecutionRunning;
+        viewPackageButton.disabled = !hasPackage || !hasRevision;
+        loadPackageIntoEditorButton.disabled = !loadedPackageDetail;
 
         if (!hasSocket) {
           executionPrereq.textContent = '先连接查看端';
@@ -1459,6 +1834,8 @@
           option.value = '';
           option.textContent = '无可用 revision';
           executionRevisionSelect.append(option);
+          loadedPackageDetail = null;
+          renderPackageDetail();
           updateExecutionControls();
           return;
         }
@@ -1475,6 +1852,7 @@
         }
 
         updateExecutionControls();
+        loadSelectedPackageDetail();
       }
 
       function renderExecutionPackages() {
@@ -1525,6 +1903,53 @@
         }
       }
 
+      async function loadSelectedPackageDetail() {
+        const selectedPackage = getSelectedExecutionPackage();
+        const revision = getSelectedExecutionRevision();
+        if (!selectedPackage || !revision) {
+          loadedPackageDetail = null;
+          renderPackageDetail();
+          updateExecutionControls();
+          return;
+        }
+
+        packageDetailBadge.textContent = '加载中';
+        packageDetail.textContent = '正在读取方案详情...';
+        try {
+          const response = await fetch(buildApiUrl(
+            serverUrlInput.value.trim() || window.location.origin,
+            `/api/automation/packages/${selectedPackage.packageId}/revisions/${revision}`
+          ));
+          const result = await response.json();
+          if (!response.ok) {
+            throw new Error(result.error || '读取方案详情失败');
+          }
+
+          loadedPackageDetail = result;
+          renderPackageDetail();
+        } catch (error) {
+          loadedPackageDetail = null;
+          packageDetailBadge.textContent = '加载失败';
+          packageDetail.textContent = `读取方案详情失败: ${error.message}`;
+        } finally {
+          updateExecutionControls();
+        }
+      }
+
+      function loadCurrentPackageIntoEditor() {
+        if (!loadedPackageDetail) {
+          return;
+        }
+
+        const automation = loadedPackageDetail.automation || {};
+        packageIdInput.value = automation.packageId || loadedPackageDetail.packageId || 'demo';
+        packageNameInput.value = automation.name || loadedPackageDetail.packageId || 'Demo Flow';
+        steps = JSON.parse(JSON.stringify(Array.isArray(automation.steps) ? automation.steps : []));
+        assets = JSON.parse(JSON.stringify(Array.isArray(loadedPackageDetail.images) ? loadedPackageDetail.images : []));
+        renderEditor();
+        publishResult.textContent = `已载入 ${loadedPackageDetail.packageId} r${loadedPackageDetail.revision} 到编辑器`;
+      }
+
       function handleAutomationStatus(message) {
         console.log('[automation_status]', message);
         if (message.sessionId) {
@@ -1544,12 +1969,23 @@
         executionResult.textContent = text || '执行状态已更新';
         automationState.textContent = text || '远程执行中';
         pushAutomationLine(`[server] ${text || summary}`.trim());
+        if (message.status === 'matched') {
+          renderAutomationMatch(message.detail, message.stepId);
+        }
         updateExecutionControls();
       }
 
       function formatAutomationStatusDetail(message) {
         const detail = message?.detail;
-        const bestImageMatch = detail?.payload?.bestImageMatch;
+        if (typeof detail?.matchedQuery === 'string' && detail.matchedQuery) {
+          const segments = [`命中文字 ${detail.matchedQuery}`];
+          if (typeof detail?.text === 'string' && detail.text && detail.text !== detail.matchedQuery) {
+            segments.push(`识别结果 ${detail.text}`);
+          }
+          return segments.join(' / ');
+        }
+
+        const bestImageMatch = detail?.payload?.bestImageMatch || detail;
         const score = Number(bestImageMatch?.score);
         if (!Number.isFinite(score)) {
           return '';
@@ -1565,6 +2001,22 @@
           segments.push(`scale ${scaleMultiplier.toFixed(2)}`);
         }
         return segments.join(' ');
+      }
+
+      function renderAutomationMatch(detail, stepId) {
+        if (!detail || typeof detail !== 'object') {
+          return;
+        }
+
+        const point = parseDisplayPoint(detail.point);
+        if (point) {
+          drawPoint(normalizeFramePoint(point), `${stepId || 'match'} 命中`);
+        }
+
+        const bounds = detail.bounds || detail?.payload?.bestImageMatch?.bounds;
+        if (bounds) {
+          drawRect(bounds, `${stepId || 'match'} 匹配框`);
+        }
       }
 
       function handleAutomationAction(message) {
@@ -1636,31 +2088,40 @@
 
       function updateStepFields() {
         const type = stepTypeInput.value;
-        waitFields.hidden = !(type === 'waitForText' || type === 'waitForImage');
-        tapFields.hidden = type !== 'tap';
-        dragFields.hidden = type !== 'drag';
-        queryInput.parentElement.hidden = type !== 'waitForText';
-        assetIdInput.parentElement.hidden = type !== 'waitForImage';
-        thresholdInput.parentElement.hidden = type !== 'waitForImage';
+        const loopMode = isLoopType(type);
+        const directTap = type === 'tap';
+        const directDrag = type === 'drag';
+        const effectiveActionType = loopMode ? loopActionTypeInput.value : directTap ? 'tap' : directDrag ? 'drag' : '';
+
+        waitFields.hidden = !(isTextWaitType(type) || isImageWaitType(type));
+        loopFields.hidden = !loopMode;
+        tapFields.hidden = effectiveActionType !== 'tap';
+        dragFields.hidden = effectiveActionType !== 'drag';
+        queryInput.parentElement.hidden = !isTextWaitType(type);
+        queryInput.parentElement.nextElementSibling.hidden = !isTextWaitType(type);
+        assetIdInput.parentElement.hidden = !isImageWaitType(type);
+        thresholdInput.parentElement.hidden = !isImageWaitType(type);
       }
 
       function addStep() {
         const type = stepTypeInput.value;
         const id = stepIdInput.value.trim() || `${type}-${steps.length + 1}`;
+        const queries = collectQueryList(queryInput.value);
         let step;
 
-        if (type === 'waitForText') {
+        if (isTextWaitType(type)) {
           step = {
             id,
             type,
-            query: queryInput.value.trim(),
+            query: queries[0] || '',
+            ...(queries.length > 1 ? { queryOptions: queries } : {}),
             match: 'contains',
             timeoutMs: Number(timeoutInput.value) || 10000,
             pollIntervalMs: Number(pollInput.value) || 500,
             region: null,
             saveAs: saveAsInput.value.trim() || `${id}-target`,
           };
-        } else if (type === 'waitForImage') {
+        } else if (isImageWaitType(type)) {
           step = {
             id,
             type,
@@ -1675,17 +2136,32 @@
           step = {
             id,
             type,
-            target: makeTarget(targetRefInput, targetXInput, targetYInput),
+            target: makeTarget(targetRefInput, targetXInput, targetYInput, targetOffsetXInput, targetOffsetYInput),
           };
         } else {
           step = {
             id,
             type,
-            from: makeTarget(fromRefInput, fromXInput, fromYInput),
-            to: makeTarget(toRefInput, toXInput, toYInput),
+            from: makeTarget(fromRefInput, fromXInput, fromYInput, fromOffsetXInput, fromOffsetYInput),
+            to: makeTarget(toRefInput, toXInput, toYInput, toOffsetXInput, toOffsetYInput),
             holdMs: Number(holdInput.value) || 120,
             durationMs: Number(durationInput.value) || 450,
           };
+        }
+
+        if (isLoopType(type)) {
+          step.action = loopActionTypeInput.value === 'drag'
+            ? {
+                type: 'drag',
+                from: makeTarget(fromRefInput, fromXInput, fromYInput, fromOffsetXInput, fromOffsetYInput),
+                to: makeTarget(toRefInput, toXInput, toYInput, toOffsetXInput, toOffsetYInput),
+                holdMs: Number(holdInput.value) || 120,
+                durationMs: Number(durationInput.value) || 450,
+              }
+            : {
+                type: 'tap',
+                target: makeTarget(targetRefInput, targetXInput, targetYInput, targetOffsetXInput, targetOffsetYInput),
+              };
         }
 
         steps.push(step);
@@ -1853,6 +2329,29 @@
         drawPoint(to, `${label} 终点`);
       }
 
+      function drawRect(bounds, label) {
+        const x = Number(bounds?.x);
+        const y = Number(bounds?.y);
+        const width = Number(bounds?.width);
+        const height = Number(bounds?.height);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+          return;
+        }
+
+        if (videoView.videoWidth <= 0 || videoView.videoHeight <= 0) {
+          return;
+        }
+
+        const rect = document.createElement('div');
+        rect.className = 'overlay-rect';
+        rect.style.left = `${clamp01(x / videoView.videoWidth) * 100}%`;
+        rect.style.top = `${clamp01(y / videoView.videoHeight) * 100}%`;
+        rect.style.width = `${clamp01(width / videoView.videoWidth) * 100}%`;
+        rect.style.height = `${clamp01(height / videoView.videoHeight) * 100}%`;
+        overlay.append(rect);
+        drawPoint({ x: x + width / 2, y: y + height / 2 }, label);
+      }
+
       function handleAutomationEvent(event) {
         const type = event.type || 'unknown';
         automationState.textContent = `${type}${event.stepId ? ` / ${event.stepId}` : ''}`;
@@ -2017,10 +2516,16 @@
 
       stepTypeInput.addEventListener('change', updateStepFields);
       executionPackageSelect.addEventListener('change', renderExecutionRevisions);
-      executionRevisionSelect.addEventListener('change', updateExecutionControls);
+      executionRevisionSelect.addEventListener('change', () => {
+        updateExecutionControls();
+        loadSelectedPackageDetail();
+      });
+      loopActionTypeInput.addEventListener('change', updateStepFields);
       refreshPackagesButton.addEventListener('click', loadExecutionPackages);
       startExecutionButton.addEventListener('click', startExecution);
       stopExecutionButton.addEventListener('click', stopExecution);
+      viewPackageButton.addEventListener('click', loadSelectedPackageDetail);
+      loadPackageIntoEditorButton.addEventListener('click', loadCurrentPackageIntoEditor);
       toggleConnectionButton.addEventListener('click', () => {
         setConnectionCollapsed(!connectionPanel.hidden);
       });
@@ -2102,6 +2607,7 @@
       updateStepFields();
       updateCropBoxFromInputs();
       renderEditor();
+      renderPackageDetail();
       renderExecutionPackages();
       updateExecutionControls();
       loadExecutionPackages();

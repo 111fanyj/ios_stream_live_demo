@@ -108,6 +108,7 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
     private var remoteAutomationInspector = RemoteAutomationInspector()
     private var activeAutomationSessionID: String?
     private var pendingAutomationCheckCommand: PendingAutomationCheckCommand?
+    private var pendingAutomationCheckTimeoutWorkItem: DispatchWorkItem?
     private var latestVideoPixelBuffer: CVPixelBuffer?
     private var lastReplayFrameSnapshotAt = Date.distantPast
 
@@ -130,6 +131,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         automationCommandQueue.sync {
             activeAutomationSessionID = nil
             pendingAutomationCheckCommand = nil
+            pendingAutomationCheckTimeoutWorkItem?.cancel()
+            pendingAutomationCheckTimeoutWorkItem = nil
             latestVideoPixelBuffer = nil
             remoteAutomationInspector.stop()
         }
@@ -177,6 +180,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
         automationCommandQueue.sync {
             activeAutomationSessionID = nil
             pendingAutomationCheckCommand = nil
+            pendingAutomationCheckTimeoutWorkItem?.cancel()
+            pendingAutomationCheckTimeoutWorkItem = nil
             latestVideoPixelBuffer = nil
             remoteAutomationInspector.stop()
         }
@@ -1147,6 +1152,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             automationCommandQueue.sync {
                 activeAutomationSessionID = sessionID
                 pendingAutomationCheckCommand = nil
+                pendingAutomationCheckTimeoutWorkItem?.cancel()
+                pendingAutomationCheckTimeoutWorkItem = nil
                 remoteAutomationInspector.start(sessionID: sessionID)
             }
             updateAutomationStatus("远程检查会话已启动")
@@ -1163,6 +1170,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 if activeAutomationSessionID == sessionID {
                     activeAutomationSessionID = nil
                     pendingAutomationCheckCommand = nil
+                    pendingAutomationCheckTimeoutWorkItem?.cancel()
+                    pendingAutomationCheckTimeoutWorkItem = nil
                 }
                 remoteAutomationInspector.stop(sessionID: sessionID)
             }
@@ -1204,10 +1213,16 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 guard activeAutomationSessionID == sessionID else {
                     return false
                 }
+                pendingAutomationCheckTimeoutWorkItem?.cancel()
                 pendingAutomationCheckCommand = PendingAutomationCheckCommand(
                     sessionID: sessionID,
                     requestID: requestID,
                     step: step
+                )
+                pendingAutomationCheckTimeoutWorkItem = makePendingAutomationCheckTimeoutWorkItem(
+                    sessionID: sessionID,
+                    requestID: requestID,
+                    stepID: step.id
                 )
                 return true
             }
@@ -1224,8 +1239,14 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
                 return
             }
 
+            let templateSummary: String
+            if let imageDataURL = step.imageDataURL {
+                templateSummary = " / imageDataURL=\(imageDataURL.count) chars"
+            } else {
+                templateSummary = ""
+            }
             updateAutomationStatus("等待视频帧执行检查: \(step.id)")
-            logEvent("收到 checkNextItem: \(step.id)")
+            logEvent("收到 checkNextItem: \(step.id)\(templateSummary)")
 
             if let latestPixelBuffer = automationCommandQueue.sync(execute: { latestVideoPixelBuffer }) {
                 logEvent("使用最近一帧立即执行检查: \(step.id)")
@@ -1251,6 +1272,8 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             }
 
             pendingAutomationCheckCommand = nil
+            pendingAutomationCheckTimeoutWorkItem?.cancel()
+            pendingAutomationCheckTimeoutWorkItem = nil
             do {
                 let payload = try remoteAutomationInspector.evaluate(
                     step: pendingCommand.step,
@@ -1296,6 +1319,52 @@ final class SampleHandler: RPBroadcastSampleHandler, URLSessionWebSocketDelegate
             payload: result.payload,
             error: result.error
         )
+    }
+
+    private func makePendingAutomationCheckTimeoutWorkItem(
+        sessionID: String,
+        requestID: String,
+        stepID: String
+    ) -> DispatchWorkItem {
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let shouldFail = self.automationCommandQueue.sync { () -> Bool in
+                guard let pendingCommand = self.pendingAutomationCheckCommand else {
+                    return false
+                }
+                guard pendingCommand.sessionID == sessionID,
+                      pendingCommand.requestID == requestID,
+                      pendingCommand.step.id == stepID
+                else {
+                    return false
+                }
+
+                self.pendingAutomationCheckCommand = nil
+                self.pendingAutomationCheckTimeoutWorkItem = nil
+                return true
+            }
+
+            guard shouldFail else {
+                return
+            }
+
+            self.updateAutomationStatus("检查失败: 当前没有可用视频帧")
+            self.logEvent("checkNextItem 本地超时: \(stepID)，等待视频帧超过 2000ms")
+            self.sendAutomationResult(
+                sessionID: sessionID,
+                requestID: requestID,
+                method: "checkNextItem",
+                stepID: stepID,
+                status: "error",
+                error: "当前没有可用视频帧，无法执行远程检查"
+            )
+        }
+
+        automationCommandQueue.asyncAfter(deadline: .now() + .milliseconds(2000), execute: workItem)
+        return workItem
     }
 
     private func persistLatestReplayFrameIfNeeded(pixelBuffer: CVPixelBuffer, at now: Date) {
