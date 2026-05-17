@@ -434,6 +434,31 @@ function projectFramePointToRawHid(roomId, point) {
   return { x, y };
 }
 
+function explainFramePointToRawHidFailure(roomId, point) {
+  const framePoint = parsePixelPoint(point);
+  if (!framePoint) {
+    return 'framePoint 无效';
+  }
+
+  const calibration = getRoom(roomId).calibration;
+  const model = deriveCalibrationHomeModel(calibration);
+  if (!model) {
+    return 'room calibration 缺少 kPixelsPerHidUnit/sourceFrameSize/homeX/homeY';
+  }
+
+  const x = Math.round((framePoint.x - model.homeX) / model.k);
+  const y = Math.round((framePoint.y - model.homeY) / model.k);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return `raw HID 坐标不是有限数: (${x}, ${y})`;
+  }
+
+  if (x < 0 || y < 0) {
+    return `raw HID 坐标为负数: (${x}, ${y}), framePoint=(${Math.round(framePoint.x)}, ${Math.round(framePoint.y)}), home=(${Math.round(model.homeX)}, ${Math.round(model.homeY)}), k=${model.k}`;
+  }
+
+  return '未知转换错误';
+}
+
 function collectImageAssetIds(steps) {
   const assetIds = new Set();
   for (const step of steps) {
@@ -2805,8 +2830,12 @@ function dispatchTapStep(session, step, target, options = {}) {
 
   const point = projectFramePointToRawHid(session.roomId, framePoint);
   if (!point) {
-    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标无法转换为 raw HID`, {
-      stepId: step.id
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标无法转换为 raw HID: ${explainFramePointToRawHidFailure(session.roomId, framePoint)}`, {
+      stepId: step.id,
+      detail: {
+        framePoint,
+        calibration: getRoom(session.roomId).calibration || null
+      }
     });
     return false;
   }
@@ -2833,8 +2862,16 @@ function dispatchDragStep(session, step, fromTarget, toTarget, options = {}) {
   const from = projectFramePointToRawHid(session.roomId, frameFrom);
   const to = projectFramePointToRawHid(session.roomId, frameTo);
   if (!from || !to) {
-    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标无法转换为 raw HID`, {
-      stepId: step.id
+    const reason = !from
+      ? `起点转换失败: ${explainFramePointToRawHidFailure(session.roomId, frameFrom)}`
+      : `终点转换失败: ${explainFramePointToRawHidFailure(session.roomId, frameTo)}`;
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标无法转换为 raw HID: ${reason}`, {
+      stepId: step.id,
+      detail: {
+        frameFrom,
+        frameTo,
+        calibration: getRoom(session.roomId).calibration || null
+      }
     });
     return false;
   }
