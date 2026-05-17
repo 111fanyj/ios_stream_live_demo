@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { buildClientSocketUrl, normalizeBaseUrl } from '../lib/network';
 
+const MAX_OVERLAY_ITEMS = 40;
+
 function appendLine(list, line, maxSize) {
   return [...list, line].slice(-maxSize);
 }
@@ -54,6 +56,82 @@ function describeExecutorResult(message) {
   return message.status || message.error || 'unknown';
 }
 
+function clamp01(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(1, number));
+}
+
+function parseDisplayPoint(point) {
+  const x = Number(point?.x);
+  const y = Number(point?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+
+  return { x, y };
+}
+
+function normalizePointForOverlay(point, videoElement) {
+  const parsed = parseDisplayPoint(point);
+  if (!parsed) {
+    return null;
+  }
+
+  if (parsed.x >= 0 && parsed.x <= 1 && parsed.y >= 0 && parsed.y <= 1) {
+    return {
+      x: clamp01(parsed.x),
+      y: clamp01(parsed.y)
+    };
+  }
+
+  const width = Number(videoElement?.videoWidth || 0);
+  const height = Number(videoElement?.videoHeight || 0);
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return {
+    x: clamp01(parsed.x / width),
+    y: clamp01(parsed.y / height)
+  };
+}
+
+function normalizeBoundsForOverlay(bounds, videoElement) {
+  const x = Number(bounds?.x);
+  const y = Number(bounds?.y);
+  const width = Number(bounds?.width);
+  const height = Number(bounds?.height);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+    return null;
+  }
+
+  if (x >= 0 && x <= 1 && y >= 0 && y <= 1 && width >= 0 && width <= 1 && height >= 0 && height <= 1) {
+    return {
+      x: clamp01(x),
+      y: clamp01(y),
+      width: clamp01(width),
+      height: clamp01(height)
+    };
+  }
+
+  const videoWidth = Number(videoElement?.videoWidth || 0);
+  const videoHeight = Number(videoElement?.videoHeight || 0);
+  if (videoWidth <= 0 || videoHeight <= 0) {
+    return null;
+  }
+
+  return {
+    x: clamp01(x / videoWidth),
+    y: clamp01(y / videoHeight),
+    width: clamp01(width / videoWidth),
+    height: clamp01(height / videoHeight)
+  };
+}
+
 export function useViewerConnection() {
   const socketRef = useRef(null);
   const peerConnectionRef = useRef(null);
@@ -81,7 +159,10 @@ export function useViewerConnection() {
     roomHasExecutor: false,
     debugLines: [],
     automationLines: [],
+    overlayItems: [],
     automationState: '自动化未运行',
+    isExecutionRunning: false,
+    activeExecutionSessionId: null,
     lastExecutorRequest: '暂无',
     lastExecutorResult: '暂无',
     roomTitle: '房间 demo-room',
@@ -103,6 +184,24 @@ export function useViewerConnection() {
     }));
   }, []);
 
+  const appendOverlayItems = useCallback((items) => {
+    if (!Array.isArray(items) || items.length === 0) {
+      return;
+    }
+
+    setState((current) => ({
+      ...current,
+      overlayItems: [...current.overlayItems, ...items].slice(-MAX_OVERLAY_ITEMS)
+    }));
+  }, []);
+
+  const clearOverlay = useCallback(() => {
+    setState((current) => ({
+      ...current,
+      overlayItems: []
+    }));
+  }, []);
+
   const resetVideo = useCallback(() => {
     const videoElement = videoRef.current;
     if (videoElement) {
@@ -116,7 +215,8 @@ export function useViewerConnection() {
     setState((current) => ({
       ...current,
       lastFrameMeta: '暂无',
-      isLive: false
+      isLive: false,
+      overlayItems: []
     }));
   }, []);
 
@@ -162,11 +262,75 @@ export function useViewerConnection() {
       viewerCount: 0,
       roomHasPublisher: false,
       roomHasExecutor: false,
+      overlayItems: [],
       automationState: '自动化未运行',
+      isExecutionRunning: false,
+      activeExecutionSessionId: null,
       lastExecutorRequest: '暂无',
       lastExecutorResult: '暂无'
     }));
   }, [closePeerConnection]);
+
+  const sendJsonMessage = useCallback((payload, summary) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      const message = 'WebSocket 尚未连接';
+      setState((current) => ({
+        ...current,
+        errorText: message,
+        connectionText: current.connected ? current.connectionText : '未连接'
+      }));
+      appendDebug(summary || '发送消息失败', { reason: message, payload });
+      return { ok: false, error: message };
+    }
+
+    socket.send(JSON.stringify(payload));
+    appendDebug(summary || '发送消息', payload);
+    return { ok: true };
+  }, [appendDebug]);
+
+  const startAutomation = useCallback((packageId, revision) => {
+    const normalizedPackageId = String(packageId || '').trim();
+    const normalizedRevision = Number(revision);
+    if (!normalizedPackageId || !Number.isInteger(normalizedRevision) || normalizedRevision < 1) {
+      return { ok: false, error: '请选择有效的方案和 revision' };
+    }
+
+    const result = sendJsonMessage(
+      { type: 'automation_start', packageId: normalizedPackageId, revision: normalizedRevision },
+      '发送 automation_start'
+    );
+
+    if (result.ok) {
+      setState((current) => ({
+        ...current,
+        automationState: `已请求启动 ${normalizedPackageId} r${normalizedRevision}`,
+        lastExecutorRequest: `automation_start ${normalizedPackageId} r${normalizedRevision}`,
+        errorText: ''
+      }));
+      appendAutomation(`start ${normalizedPackageId} r${normalizedRevision}`);
+    }
+
+    return result;
+  }, [appendAutomation, sendJsonMessage]);
+
+  const stopAutomation = useCallback(() => {
+    const result = sendJsonMessage(
+      { type: 'automation_stop', sessionId: state.activeExecutionSessionId || null },
+      '发送 automation_stop'
+    );
+
+    if (result.ok) {
+      setState((current) => ({
+        ...current,
+        automationState: '已请求停止执行',
+        errorText: ''
+      }));
+      appendAutomation('stop requested');
+    }
+
+    return result;
+  }, [appendAutomation, sendJsonMessage, state.activeExecutionSessionId]);
 
   const sendSignal = useCallback((targetId, signal) => {
     const socket = socketRef.current;
@@ -280,6 +444,7 @@ export function useViewerConnection() {
       ...current,
       debugLines: [],
       automationLines: [],
+      overlayItems: [],
       isLive: false,
       connectionText: '信令连接中',
       publisherText: '未检测到',
@@ -313,20 +478,97 @@ export function useViewerConnection() {
       });
 
       if (message.type === 'automation_event') {
-        appendAutomation(`event ${message.event?.type || 'unknown'}`);
+        const eventPayload = message.event || {};
+        const eventType = eventPayload.type || 'unknown';
+        const overlayElements = [];
+        const videoElement = videoRef.current;
+
+        if (eventType === 'tap') {
+          const point = normalizePointForOverlay(eventPayload.point, videoElement);
+          if (point) {
+            overlayElements.push({ kind: 'point', point, label: eventPayload.stepId || 'tap' });
+          }
+        } else if (eventType === 'drag') {
+          const from = normalizePointForOverlay(eventPayload.from, videoElement);
+          const to = normalizePointForOverlay(eventPayload.to, videoElement);
+          if (from && to) {
+            overlayElements.push({ kind: 'drag', from, to, label: eventPayload.stepId || 'drag' });
+          }
+        } else if (eventType === 'match') {
+          const point = normalizePointForOverlay(eventPayload.point, videoElement);
+          if (point) {
+            overlayElements.push({ kind: 'point', point, label: eventPayload.stepId || 'match' });
+          }
+        }
+
+        if (overlayElements.length > 0) {
+          appendOverlayItems(overlayElements);
+        }
+
+        setState((current) => ({
+          ...current,
+          automationState: eventType === 'error'
+            ? `错误: ${eventPayload.message || eventPayload.stepId || 'automation'}`
+            : `${eventType}${eventPayload.stepId ? ` / ${eventPayload.stepId}` : ''}`
+        }));
+        appendAutomation(`event ${eventType} ${eventPayload.stepId || ''} ${eventPayload.message || ''}`.trim());
         return;
       }
 
       if (message.type === 'automation_status') {
+        const isExecutionRunning = ['starting', 'running', 'polling', 'matched'].includes(message.status);
+        const hasFinished = ['stopped', 'completed', 'error'].includes(message.status);
+        const summary = message.summary || message.status || '自动化运行中';
+        const detail = message.detail;
+        const overlayElements = [];
+        const videoElement = videoRef.current;
+
+        if (message.status === 'matched' && detail && typeof detail === 'object') {
+          const point = normalizePointForOverlay(detail.point, videoElement);
+          const bounds = normalizeBoundsForOverlay(detail.bounds || detail?.payload?.bestImageMatch?.bounds, videoElement);
+          if (point) {
+            overlayElements.push({ kind: 'point', point, label: `${message.stepId || 'match'} 命中` });
+          }
+          if (bounds) {
+            overlayElements.push({ kind: 'rect', bounds, label: `${message.stepId || 'match'} 匹配框` });
+          }
+        }
+
+        if (overlayElements.length > 0) {
+          appendOverlayItems(overlayElements);
+        }
+
         setState((current) => ({
           ...current,
-          automationState: message.summary || message.status || '自动化运行中'
+          automationState: summary,
+          isExecutionRunning: hasFinished ? false : (isExecutionRunning || current.isExecutionRunning),
+          activeExecutionSessionId: message.sessionId || (hasFinished ? null : current.activeExecutionSessionId),
+          errorText: message.status === 'error' ? message.message || summary : current.errorText
         }));
-        appendAutomation(`status ${message.status || 'unknown'} ${message.summary || ''}`.trim());
+        appendAutomation(`status ${message.status || 'unknown'} ${summary}`.trim());
         return;
       }
 
       if (message.type === 'automation_action') {
+        const overlayElements = [];
+        const videoElement = videoRef.current;
+        if (message.action === 'tap') {
+          const point = normalizePointForOverlay(message.command?.framePoint, videoElement);
+          if (point) {
+            overlayElements.push({ kind: 'point', point, label: `${message.stepId || 'tap'} 目标` });
+          }
+        } else if (message.action === 'drag') {
+          const from = normalizePointForOverlay(message.command?.frameFrom, videoElement);
+          const to = normalizePointForOverlay(message.command?.frameTo, videoElement);
+          if (from && to) {
+            overlayElements.push({ kind: 'drag', from, to, label: `${message.stepId || 'drag'} 目标` });
+          }
+        }
+
+        if (overlayElements.length > 0) {
+          appendOverlayItems(overlayElements);
+        }
+
         setState((current) => ({
           ...current,
           lastExecutorRequest: describeAction(message)
@@ -411,6 +653,16 @@ export function useViewerConnection() {
           publisherText: '未检测到',
           isLive: false
         }));
+        return;
+      }
+
+      if (message.type === 'warning') {
+        const warningMessage = message.message || 'Unknown warning';
+        setState((current) => ({
+          ...current,
+          errorText: warningMessage
+        }));
+        appendDebug('收到 warning', { message: warningMessage });
         return;
       }
 
@@ -529,9 +781,13 @@ export function useViewerConnection() {
     roomId: config.roomId,
     token: config.token,
     normalizedServerUrl: normalizeBaseUrl(config.serverUrl),
+    remoteStream,
     videoRef,
     connect,
     disconnect,
-    updateConfig
+    updateConfig,
+    startAutomation,
+    stopAutomation,
+    clearOverlay
   };
 }

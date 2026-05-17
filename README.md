@@ -5,7 +5,7 @@
 - iOS 主 App 负责配置服务器地址并触发系统屏幕广播。
 - ReplayKit Broadcast Upload Extension 抓取当前屏幕画面。
 - Node.js 服务端通过 WebSocket 转发 WebRTC 信令。
-- Broadcast Extension 与浏览器查看端通过 WebRTC DataChannel 点对点传输 JPEG 帧。
+- Broadcast Extension 与浏览器查看端通过 WebRTC 视频轨点对点传输实时画面。
 
 ## 项目结构
 
@@ -31,9 +31,9 @@ STREAM_TOKEN=your-token npm start
 
 - `http://你的电脑IP:3000/`
 
-### React 前端迁移开发态
+### React 前端开发态
 
-当前仓库已经开始迁移到 React + Vite。现阶段保留旧版静态页面，同时提供新的前端开发入口：
+当前仓库已经接入 React + Vite，React 工作台和 React OCR 调试页都可直接使用。现阶段仍保留旧版静态页面，作为对照和回归入口：
 
 ```bash
 npm install
@@ -45,6 +45,11 @@ npm run dev
 - 新 React 工作台路由：`/`
 - 新 React OCR 调试路由：`/debug-ocr`
 - 旧版页面对照入口：`/legacy/` 与 `/legacy/debug-ocr.html`
+
+说明：
+
+- `npm start` 仍默认托管旧版静态页面。
+- React 是当前主要开发入口，适合继续推进工作台和调试页功能。
 
 如果要用 Express 直接托管 React 构建产物，先构建，再用 React 模式启动：
 
@@ -95,7 +100,7 @@ open IOSStreamViewer.xcodeproj
 4. 浏览器打开服务端页面并填写相同房间 ID。
 5. iPhone 打开控制中心，长按“屏幕录制”，选择 `IOSStreamViewer`，点击开始广播。
 6. 服务端负责转发 offer、answer、ICE candidate 等信令。
-7. 浏览器收到 DataChannel 帧后即可看到实时画面。
+7. 浏览器收到 WebRTC 视频轨后即可看到实时画面。
 
 ## 5. 自动化方案流程
 
@@ -118,13 +123,14 @@ open IOSStreamViewer.xcodeproj
 这是一个以“远程编排”为主的演示版本：
 
 - 服务端负责房间管理、鉴权、WebRTC 信令转发，以及自动化流程编排。
-- iOS Broadcast Extension 保留视频推流与基础检查原语，按 server 命令执行 OCR 或图片匹配。
+- iOS Broadcast Extension 负责 WebRTC 视频轨推流，并按 server 命令执行 OCR 或图片匹配。
 - 真实点击、拖拽由独立 executor 执行，当前推荐实现是 ESP32 BLE HID + USB 串口 bridge。
-- Web 前端可以选择方案并开始、停止执行，同时继续保留编辑和发布 ZIP 的能力。
-- 浏览器工作台会显示 publisher、executor 是否在线，以及最近一次动作请求和动作结果。
+- React 工作台已经支持查看视频、叠加 overlay、截取模板、选择 revision、开始或停止执行、编辑并发布方案。
+- React OCR 调试页已经支持 probe 通道、调试帧预览、OCR 候选查看、标定摘要和标定参考图叠层。
+- 旧版静态页面继续保留在 `/legacy/`，便于对照 React 页面行为和做回归检查。
 
 如果你后续要升级为生产可用版本，建议下一步替换为：
 
-- iOS 端使用 `RTCVideoSource` 或 VideoToolbox 输出真正的视频轨
+- 让 React 构建产物成为默认托管入口，逐步收缩 legacy 页面职责
 - 服务端改成 WebRTC SFU 或接入现成媒体服务器
-- 浏览器端改用 `<video>` 播放 MediaStream，而不是接收 DataChannel 中的 JPEG 帧
+- 补齐生产级鉴权、观测和错误恢复策略

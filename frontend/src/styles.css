@@ -237,6 +237,25 @@ textarea {
   color: var(--ink);
 }
 
+.field-label select,
+.field-label textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--ink);
+}
+
+.field-label textarea {
+  resize: vertical;
+  min-height: 108px;
+}
+
+.field-label input[type="file"] {
+  padding: 10px 12px;
+}
+
 .button-row {
   display: flex;
   gap: 10px;
@@ -251,6 +270,13 @@ textarea {
   cursor: pointer;
 }
 
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .button-primary {
   border-color: rgba(21, 109, 82, 0.34);
   background: linear-gradient(135deg, rgba(21, 109, 82, 0.16), rgba(15, 90, 211, 0.12));
@@ -258,6 +284,22 @@ textarea {
 
 .button-secondary {
   background: rgba(255, 255, 255, 0.78);
+}
+
+.button-tertiary {
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: rgba(24, 32, 42, 0.06);
+  color: var(--ink);
+}
+
+.button-primary:disabled,
+.button-secondary:disabled,
+.button-tertiary:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .room-list,
@@ -281,6 +323,11 @@ textarea {
   border-radius: 18px;
   cursor: pointer;
   padding: 14px;
+}
+
+.package-card.selected {
+  border-color: rgba(15, 90, 211, 0.24);
+  background: linear-gradient(135deg, rgba(21, 109, 82, 0.12), rgba(15, 90, 211, 0.08));
 }
 
 .key-value-list {
@@ -327,6 +374,12 @@ textarea {
   color: var(--danger);
 }
 
+.helper-text {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .viewer-stage-react {
   min-height: 72vh;
   display: grid;
@@ -342,11 +395,14 @@ textarea {
 .video-shell-react {
   position: relative;
   width: min(420px, 100%);
-  min-height: min(76vh, 760px);
   border-radius: 22px;
   overflow: hidden;
   background: linear-gradient(180deg, rgba(16, 20, 24, 0.92), rgba(28, 34, 39, 0.92));
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.video-shell-react.empty {
+  min-height: min(76vh, 760px);
 }
 
 .video-shell-react.live {
@@ -356,9 +412,150 @@ textarea {
 .video-shell-react video {
   display: block;
   width: 100%;
-  height: 100%;
-  object-fit: contain;
+  height: auto;
+  max-height: min(76vh, 760px);
   background: #101418;
+}
+
+.video-overlay-react,
+.crop-layer-react {
+  position: absolute;
+  inset: 0;
+}
+
+.video-overlay-react {
+  pointer-events: none;
+}
+
+.crop-layer-react {
+  pointer-events: none;
+}
+
+.overlay-marker-react {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border: 3px solid var(--danger);
+  border-radius: 999px;
+  background: rgba(194, 65, 75, 0.22);
+  box-shadow: 0 0 0 8px rgba(194, 65, 75, 0.12);
+}
+
+.overlay-line-react {
+  position: absolute;
+  height: 3px;
+  transform-origin: left center;
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 5px rgba(15, 90, 211, 0.12);
+}
+
+.overlay-rect-react {
+  position: absolute;
+  border: 2px solid var(--accent-strong);
+  border-radius: 8px;
+  background: rgba(15, 90, 211, 0.12);
+  box-shadow: 0 0 0 4px rgba(15, 90, 211, 0.08);
+}
+
+.overlay-label-react {
+  position: absolute;
+  transform: translate(10px, -26px);
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: rgba(23, 32, 42, 0.86);
+  color: white;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.crop-box-react {
+  position: absolute;
+  z-index: 4;
+  min-width: 24px;
+  min-height: 24px;
+  border: 2px solid var(--accent-strong);
+  border-radius: 6px;
+  background: rgba(15, 90, 211, 0.12);
+  box-shadow: 0 0 0 9999px rgba(16, 20, 24, 0.16);
+  cursor: move;
+  touch-action: none;
+  pointer-events: auto;
+}
+
+.crop-box-label-react {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(23, 32, 42, 0.82);
+  color: white;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.crop-handle-react {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid white;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  box-shadow: 0 1px 4px rgba(23, 32, 42, 0.28);
+}
+
+.crop-handle-react[data-handle="nw"] {
+  left: -7px;
+  top: -7px;
+  cursor: nwse-resize;
+}
+
+.crop-handle-react[data-handle="n"] {
+  left: calc(50% - 6px);
+  top: -7px;
+  cursor: ns-resize;
+}
+
+.crop-handle-react[data-handle="ne"] {
+  right: -7px;
+  top: -7px;
+  cursor: nesw-resize;
+}
+
+.crop-handle-react[data-handle="e"] {
+  right: -7px;
+  top: calc(50% - 6px);
+  cursor: ew-resize;
+}
+
+.crop-handle-react[data-handle="se"] {
+  right: -7px;
+  bottom: -7px;
+  cursor: nwse-resize;
+}
+
+.crop-handle-react[data-handle="s"] {
+  left: calc(50% - 6px);
+  bottom: -7px;
+  cursor: ns-resize;
+}
+
+.crop-handle-react[data-handle="sw"] {
+  left: -7px;
+  bottom: -7px;
+  cursor: nesw-resize;
+}
+
+.crop-handle-react[data-handle="w"] {
+  left: -7px;
+  top: calc(50% - 6px);
+  cursor: ew-resize;
+}
+
+.compact-status-row-react {
+  margin-top: 0;
+  justify-content: flex-end;
 }
 
 .video-empty-state {
@@ -518,8 +715,178 @@ textarea {
   min-height: 220px;
 }
 
+.calibration-reference-react {
+  display: grid;
+  gap: 10px;
+}
+
+.reference-frame-react {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(rgba(31, 41, 51, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(31, 41, 51, 0.08) 1px, transparent 1px),
+    #fffaf0;
+  background-size: 10% 10%;
+}
+
+.reference-image-react,
+.reference-overlay-react {
+  position: absolute;
+  inset: 0;
+}
+
+.reference-image-react {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
+
+.reference-point-react {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--point-color, #34c759);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.reference-point-react.expected {
+  width: 14px;
+  height: 14px;
+  background: transparent;
+  border: 2px solid var(--point-color, #34c759);
+}
+
+.reference-point-react.app {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: transparent;
+  border: 2px solid var(--point-color, #34c759);
+}
+
+.reference-label-react {
+  position: absolute;
+  transform: translate(10px, -50%);
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(23, 32, 42, 0.82);
+  color: white;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .summary-grid-compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.execution-panel-react,
+.editor-panel-react {
+  grid-column: 1 / -1;
+}
+
+.compact-grid-react {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.package-list-compact {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.detail-two-column-react {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 14px;
+}
+
+.step-details-react {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.editor-layout-react {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(320px, 1fr) minmax(300px, 0.8fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.subtle-panel-react {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.asset-gallery-react {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.asset-card-react {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+}
+
+.asset-card-react img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 14px;
+  border: 1px solid rgba(24, 32, 42, 0.08);
+  background: rgba(20, 24, 28, 0.92);
+}
+
+.asset-card-react footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.inline-button-row-react {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.danger-text {
+  color: var(--danger);
+}
+
+.code-preview-react {
+  width: 100%;
+  min-height: 420px;
+  border: 1px solid rgba(16, 20, 24, 0.08);
+  border-radius: 18px;
+  background: rgba(20, 24, 28, 0.94);
+  color: rgba(245, 248, 250, 0.92);
+  font-family: "SFMono-Regular", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 14px;
+  resize: vertical;
+}
+
+.code-preview-compact-react {
+  min-height: 260px;
 }
 
 @media (max-width: 1180px) {
@@ -536,6 +903,12 @@ textarea {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .detail-two-column-react,
+  .editor-layout-react,
+  .compact-grid-react {
+    grid-template-columns: 1fr;
+  }
+
   .result-grid-react,
   .debug-summary-grid {
     grid-template-columns: 1fr;
@@ -545,7 +918,7 @@ textarea {
     min-height: 56vh;
   }
 
-  .video-shell-react {
+  .video-shell-react.empty {
     min-height: 60vh;
   }
 }

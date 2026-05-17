@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { buildClientSocketUrl, normalizeBaseUrl } from '../lib/network';
 
 function pushLine(lines, nextLine, maxSize = 80) {
@@ -18,6 +18,112 @@ function formatBounds(bounds) {
   return [bounds.x, bounds.y, bounds.width, bounds.height]
     .map((value) => Number(value || 0).toFixed(3))
     .join(', ');
+}
+
+function normalizePointColor(value) {
+  return value || '#34c759';
+}
+
+function calibrationFrameSize(message) {
+  const detail = message?.detail || {};
+  return detail.frame?.sourceFrameSize
+    || detail.frame?.imageSize
+    || detail.calibration?.sourceFrameSize
+    || message?.calibration?.sourceFrameSize
+    || null;
+}
+
+function calibrationReferencePoints(message) {
+  const detail = message?.detail || {};
+  const validationSteps = Array.isArray(detail.validation?.steps) ? detail.validation.steps : [];
+  if (validationSteps.length > 0) {
+    const points = [];
+    for (const step of validationSteps) {
+      if (step.expectedFramePx) {
+        points.push({
+          label: `E ${step.label}`,
+          color: normalizePointColor(step.color),
+          centerPx: step.expectedFramePx,
+          kind: 'expected'
+        });
+      }
+      if (step.appReportedFramePx) {
+        points.push({
+          label: `A ${step.label}${Number.isFinite(step.appErrorPx) ? ` · ${Math.round(step.appErrorPx)}px` : ''}`,
+          color: normalizePointColor(step.color),
+          centerPx: step.appReportedFramePx,
+          kind: 'app'
+        });
+      }
+      if (step.detectedFramePx) {
+        points.push({
+          label: `D ${step.label}${Number.isFinite(step.errorPx) ? ` · ${Math.round(step.errorPx)}px` : ''}`,
+          color: normalizePointColor(step.color),
+          centerPx: step.detectedFramePx,
+          kind: 'detected'
+        });
+      }
+    }
+    if (points.length > 0) {
+      return points;
+    }
+  }
+
+  const detections = Array.isArray(detail.frame?.detections) ? detail.frame.detections : [];
+  if (detections.length > 0) {
+    return detections
+      .filter((detection) => detection?.centerPx)
+      .map((detection) => ({
+        label: detection.label || detection.stepId || 'point',
+        color: normalizePointColor(detection.color),
+        centerPx: detection.centerPx,
+        kind: 'detected'
+      }));
+  }
+
+  const samples = Array.isArray(detail.calibration?.samples) ? detail.calibration.samples : [];
+  return samples
+    .filter((sample) => sample?.centerPx)
+    .map((sample) => ({
+      label: sample.label || sample.stepId || 'point',
+      color: normalizePointColor(sample.color),
+      centerPx: sample.centerPx,
+      kind: 'detected'
+    }));
+}
+
+function buildCalibrationReference(message) {
+  const size = calibrationFrameSize(message);
+  const width = Number(size?.width);
+  const height = Number(size?.height);
+  const points = calibrationReferencePoints(message);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0 || points.length === 0) {
+    return null;
+  }
+
+  const mode = message?.detail?.mode === 'validation' ? '验证' : '标定';
+  return {
+    width,
+    height,
+    meta: `${mode}参考 · ${Math.round(width)} x ${Math.round(height)} px · ${points.length} 点`,
+    points: points
+      .map((point) => {
+        const x = Number(point.centerPx?.x);
+        const y = Number(point.centerPx?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          return null;
+        }
+
+        return {
+          label: `${point.label} (${Math.round(x)}, ${Math.round(y)})`,
+          kind: point.kind || 'detected',
+          color: normalizePointColor(point.color),
+          left: Math.max(0, Math.min(100, (x / width) * 100)),
+          top: Math.max(0, Math.min(100, (y / height) * 100))
+        };
+      })
+      .filter(Boolean)
+  };
 }
 
 export function useProbeConnection() {
@@ -44,7 +150,8 @@ export function useProbeConnection() {
     matchedCandidates: [],
     allCandidates: [],
     roomHasCalibrationApp: false,
-    roomCalibration: null
+    roomCalibration: null,
+    calibrationReference: null
   });
 
   const appendLog = useCallback((message) => {
@@ -110,6 +217,7 @@ export function useProbeConnection() {
           calibrationStatus: message.calibration ? '已有标定参数' : '未标定',
           roomHasCalibrationApp: Boolean(message.hasCalibrationApp),
           roomCalibration: message.calibration || null,
+          calibrationReference: current.calibrationReference,
           calibrationSummary: message.calibration
             ? JSON.stringify(message.calibration, null, 2)
             : current.calibrationSummary
@@ -167,6 +275,7 @@ export function useProbeConnection() {
         setState((current) => ({
           ...current,
           calibrationStatus: message.message || message.status || '标定中',
+          calibrationReference: buildCalibrationReference(message),
           calibrationSummary: `status: ${message.status || 'unknown'}\nmessage: ${message.message || ''}\n\n${JSON.stringify(message.detail || {}, null, 2)}\n\ncalibration:\n${JSON.stringify(message.calibration || null, null, 2)}`,
           roomCalibration: message.calibration || current.roomCalibration
         }));
@@ -274,8 +383,22 @@ export function useProbeConnection() {
     socket.send(JSON.stringify({ type: 'calibration_validate_start' }));
   }, [appendLog, socket, state.roomCalibration, state.roomHasCalibrationApp]);
 
+  const calibrationReference = useMemo(() => {
+    const reference = state.calibrationReference;
+    if (!reference) {
+      return null;
+    }
+
+    const canReuseFrameImage = Boolean(state.frameImageDataUrl);
+    return {
+      ...reference,
+      imageDataUrl: canReuseFrameImage ? state.frameImageDataUrl : ''
+    };
+  }, [state.calibrationReference, state.frameImageDataUrl]);
+
   return {
     ...state,
+    calibrationReference,
     serverUrl: config.serverUrl,
     roomId: config.roomId,
     query: config.query,

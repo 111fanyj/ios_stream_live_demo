@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchAutomationPackages, fetchPackageDetail } from '../lib/api';
+import { fetchAutomationPackages, fetchPackageDetail, saveAutomationPackage } from '../lib/api';
 
 export function useAutomationPackages(baseUrl) {
   const [packagesState, setPackagesState] = useState({
@@ -13,33 +13,43 @@ export function useAutomationPackages(baseUrl) {
     error: ''
   });
 
+  const refreshPackages = useCallback(async () => {
+    setPackagesState((current) => ({ ...current, loading: true, error: '' }));
+    try {
+      const data = await fetchAutomationPackages(baseUrl);
+      setPackagesState({
+        packages: data.packages || [],
+        loading: false,
+        error: ''
+      });
+      return data;
+    } catch (error) {
+      setPackagesState({
+        packages: [],
+        loading: false,
+        error: error.message || 'Failed to load packages'
+      });
+      throw error;
+    }
+  }, [baseUrl]);
+
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
-      try {
-        setPackagesState((current) => ({ ...current, loading: true, error: '' }));
-        const data = await fetchAutomationPackages(baseUrl);
-        if (!cancelled) {
-          setPackagesState({
-            packages: data.packages || [],
-            loading: false,
-            error: ''
-          });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setPackagesState({ packages: [], loading: false, error: error.message || 'Failed to load packages' });
-        }
+    refreshPackages().catch((error) => {
+      if (!cancelled) {
+        setPackagesState({
+          packages: [],
+          loading: false,
+          error: error.message || 'Failed to load packages'
+        });
       }
-    }
-
-    load();
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [baseUrl]);
+  }, [refreshPackages]);
 
   const selectPackage = useCallback(async (packageId, revision) => {
     setDetailState({ detail: null, loading: true, error: '' });
@@ -51,11 +61,19 @@ export function useAutomationPackages(baseUrl) {
     }
   }, [baseUrl]);
 
+  const publishPackage = useCallback(async (automation, images) => {
+    const result = await saveAutomationPackage(baseUrl, automation, images);
+    await refreshPackages();
+    return result.revision;
+  }, [baseUrl, refreshPackages]);
+
   return {
     ...packagesState,
     detail: detailState.detail,
     detailLoading: detailState.loading,
     detailError: detailState.error,
-    selectPackage
+    selectPackage,
+    refreshPackages,
+    publishPackage
   };
 }

@@ -33,7 +33,7 @@
 
 ```mermaid
 flowchart LR
-    Browser[浏览器工作台<br/>index.html / debug-ocr.html] -->|viewer / probe WebSocket| Server[Node.js Server]
+  Browser[浏览器工作台<br/>React routes / legacy pages] -->|viewer / probe WebSocket| Server[Node.js Server]
     iOSApp[iOS 主 App] -->|保存配置 / App Group| Extension[Broadcast Extension]
     Extension -->|publisher WebSocket| Server
     Extension -->|WebRTC 视频轨| Browser
@@ -208,12 +208,16 @@ flowchart LR
 
 #### 浏览器页面
 
+- `frontend/src/`
+  - 当前 React 前端源码。
+  - 包含工作台路由、OCR 调试路由、viewer/probe hooks 与 API 封装。
+
 - `server/public/index.html`
-  - 这是综合工作台。
+  - 这是 legacy 综合工作台。
   - 功能包括：实时视频查看、裁剪模板、编辑 automation JSON、发布 ZIP、选择 revision、启动/停止自动化、显示动作事件与结果。
 
 - `server/public/debug-ocr.html`
-  - 这是 OCR/标定调试页。
+  - 这是 legacy OCR/标定调试页。
   - 功能包括：连接 probe 通道、请求内存帧 OCR、显示 OCR 候选框、发起 3 点以上的标定流程、显示彩色点参考图。
 
 ### 5.2 iOS 主 App 层
@@ -459,6 +463,8 @@ flowchart LR
 
 ### 第二优先级
 
+- `frontend/src/routes/WorkbenchPage.jsx`
+- `frontend/src/routes/DebugOcrPage.jsx`
 - `server/public/index.html`
 - `server/public/debug-ocr.html`
 - `ios/App/Sources/ContentView.swift`

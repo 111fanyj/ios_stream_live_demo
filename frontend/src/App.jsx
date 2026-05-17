@@ -7,10 +7,10 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">React Migration</p>
+          <p className="eyebrow">React Workspace</p>
           <h1>iOS 自动化直播工作台</h1>
           <p className="app-subtitle">
-            新前端先完成脚手架、路由和基础数据接入，实时视频、调试通信和编辑器逻辑接下来分阶段迁移。
+            React 前端已经承担工作台与 OCR 调试主界面，当前保留 legacy 页面作为功能对照与回归检查入口。
           </p>
         </div>
         <nav className="app-nav" aria-label="Primary">

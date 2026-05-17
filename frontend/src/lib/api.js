@@ -21,3 +21,13 @@ export function fetchAutomationPackages(baseUrl) {
 export function fetchPackageDetail(baseUrl, packageId, revision) {
   return readJson(buildHttpUrl(baseUrl, `/api/automation/packages/${encodeURIComponent(packageId)}/revisions/${revision}`));
 }
+
+export function saveAutomationPackage(baseUrl, automation, images) {
+  return readJson(buildHttpUrl(baseUrl, '/api/automation/packages'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ automation, images })
+  });
+}

@@ -2,15 +2,16 @@ import { useProbeConnection } from '../hooks/useProbeConnection';
 
 export function DebugOcrPage() {
   const probe = useProbeConnection();
+  const reference = probe.calibrationReference;
 
   return (
     <div className="page-grid page-grid-debug">
       <section className="panel hero-panel debug-hero">
         <div>
-          <p className="eyebrow">Phase 1</p>
-          <h2>OCR 调试页已接入 probe</h2>
+          <p className="eyebrow">Phase 2</p>
+          <h2>OCR 调试页已经接通 probe 与标定可视化</h2>
           <p className="panel-copy">
-            现在已经可以直接向 Broadcast Extension 请求最近一帧内存图，展示 JPEG 预览、OCR 候选和标定状态。参考图叠层后续再细化。
+            现在可以直接向 Broadcast Extension 请求最近一帧内存图，展示 JPEG 预览、OCR 候选、标定摘要，以及标定或验证阶段的参考点叠层。
           </p>
         </div>
         <div className="status-row">
@@ -166,6 +167,41 @@ export function DebugOcrPage() {
           </div>
           <pre className="console-panel calibration-console">{probe.calibrationSummary}</pre>
         </section>
+        {reference ? (
+          <section className="panel nested-panel-react">
+            <div className="panel-header">
+              <h2>标定参考图</h2>
+              <span className="panel-meta">{reference.meta}</span>
+            </div>
+            <div className="calibration-reference-react">
+              <div className="reference-frame-react" style={{ aspectRatio: `${reference.width} / ${reference.height}` }}>
+                {reference.imageDataUrl ? (
+                  <img src={reference.imageDataUrl} alt="标定参考帧" className="reference-image-react" />
+                ) : null}
+                <div className="reference-overlay-react">
+                  {reference.points.map((point) => (
+                    <div key={point.label}>
+                      <div
+                        className={`reference-point-react ${point.kind}`}
+                        style={{
+                          left: `${point.left}%`,
+                          top: `${point.top}%`,
+                          '--point-color': point.color
+                        }}
+                      />
+                      <div
+                        className="reference-label-react"
+                        style={{ left: `${point.left}%`, top: `${point.top}%` }}
+                      >
+                        {point.label}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        ) : null}
       </section>
     </div>
   );
