@@ -871,6 +871,12 @@ textarea {
   grid-column: 2;
 }
 
+.form-grid-react {
+  display: grid;
+  gap: 10px;
+  align-items: start;
+}
+
 .compact-grid-react {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

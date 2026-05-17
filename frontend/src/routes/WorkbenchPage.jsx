@@ -1236,34 +1236,38 @@ export function WorkbenchPage() {
             <span className="collapse-indicator">展开 / 折叠</span>
           </summary>
           <div className="collapsible-body stack-panel">
-            <label className="field-label">
-              <span>服务端地址</span>
-              <input
-                value={viewer.serverUrl}
-                onChange={(event) =>
-                  viewer.updateConfig('serverUrl', event.target.value)
-                }
-              />
-            </label>
-            <label className="field-label">
-              <span>房间 ID</span>
-              <input
-                value={viewer.roomId}
-                onChange={(event) =>
-                  viewer.updateConfig('roomId', event.target.value)
-                }
-              />
-            </label>
-            <label className="field-label">
-              <span>Token</span>
-              <input
-                value={viewer.token}
-                onChange={(event) =>
-                  viewer.updateConfig('token', event.target.value)
-                }
-                placeholder="可选"
-              />
-            </label>
+            <div className="form-grid-react compact-grid-react">
+              <label className="field-label">
+                <span>服务端地址</span>
+                <input
+                  value={viewer.serverUrl}
+                  onChange={(event) =>
+                    viewer.updateConfig('serverUrl', event.target.value)
+                  }
+                />
+              </label>
+              <label className="field-label">
+                <span>房间 ID</span>
+                <input
+                  value={viewer.roomId}
+                  onChange={(event) =>
+                    viewer.updateConfig('roomId', event.target.value)
+                  }
+                />
+              </label>
+            </div>
+            <div className="form-grid-react compact-grid-react">
+              <label className="field-label">
+                <span>Token</span>
+                <input
+                  value={viewer.token}
+                  onChange={(event) =>
+                    viewer.updateConfig('token', event.target.value)
+                  }
+                  placeholder="可选"
+                />
+              </label>
+            </div>
             <div className="button-row">
               <button
                 type="button"
@@ -1486,31 +1490,33 @@ export function WorkbenchPage() {
                 <h2>添加动作</h2>
                 <span className="panel-meta">先组装 JSON，再发布</span>
               </div>
-              <label className="field-label">
-                <span>动作类型</span>
-                <select
-                  value={stepForm.type}
-                  onChange={(event) =>
-                    handleUpdateStepField('type', event.target.value)
-                  }
-                >
-                  {STEP_TYPE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field-label">
-                <span>步骤 ID</span>
-                <input
-                  value={stepForm.id}
-                  onChange={(event) =>
-                    handleUpdateStepField('id', event.target.value)
-                  }
-                  placeholder="例如 wait-login"
-                />
-              </label>
+              <div className="form-grid-react compact-grid-react">
+                <label className="field-label">
+                  <span>动作类型</span>
+                  <select
+                    value={stepForm.type}
+                    onChange={(event) =>
+                      handleUpdateStepField('type', event.target.value)
+                    }
+                  >
+                    {STEP_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field-label">
+                  <span>步骤 ID</span>
+                  <input
+                    value={stepForm.id}
+                    onChange={(event) =>
+                      handleUpdateStepField('id', event.target.value)
+                    }
+                    placeholder="例如 wait-login"
+                  />
+                </label>
+              </div>
               {showWaitFields ? (
                 <>
                   {isTextWaitType(stepForm.type) ? (
@@ -1527,16 +1533,18 @@ export function WorkbenchPage() {
                     </label>
                   ) : null}
                   {isImageWaitType(stepForm.type) ? (
-                    <label className="field-label">
-                      <span>图片 Asset ID</span>
-                      <input
-                        value={stepForm.assetId}
-                        onChange={(event) =>
-                          handleUpdateStepField('assetId', event.target.value)
-                        }
-                        placeholder="例如 login-icon"
-                      />
-                    </label>
+                    <div className="form-grid-react compact-grid-react">
+                      <label className="field-label">
+                        <span>图片 Asset ID</span>
+                        <input
+                          value={stepForm.assetId}
+                          onChange={(event) =>
+                            handleUpdateStepField('assetId', event.target.value)
+                          }
+                          placeholder="例如 login-icon"
+                        />
+                      </label>
+                    </div>
                   ) : null}
                   <div className="form-grid-react compact-grid-react">
                     <label className="field-label">
@@ -1596,21 +1604,23 @@ export function WorkbenchPage() {
                 </>
               ) : null}
               {showLoopFields ? (
-                <label className="field-label">
-                  <span>loop 动作类型</span>
-                  <select
-                    value={stepForm.loopActionType}
-                    onChange={(event) =>
-                      handleUpdateStepField(
-                        'loopActionType',
-                        event.target.value,
-                      )
-                    }
-                  >
-                    <option value="tap">点击</option>
-                    <option value="drag">拖拽</option>
-                  </select>
-                </label>
+                <div className="form-grid-react compact-grid-react">
+                  <label className="field-label">
+                    <span>loop 动作类型</span>
+                    <select
+                      value={stepForm.loopActionType}
+                      onChange={(event) =>
+                        handleUpdateStepField(
+                          'loopActionType',
+                          event.target.value,
+                        )
+                      }
+                    >
+                      <option value="tap">点击</option>
+                      <option value="drag">拖拽</option>
+                    </select>
+                  </label>
+                </div>
               ) : null}
               {effectiveActionType === 'tap' ? (
                 <div className="subtle-panel-react">
@@ -1618,16 +1628,18 @@ export function WorkbenchPage() {
                     <h2>点击目标</h2>
                     <span className="panel-meta">引用或像素坐标二选一</span>
                   </div>
-                  <label className="field-label">
-                    <span>目标引用</span>
-                    <input
-                      value={stepForm.targetRef}
-                      onChange={(event) =>
-                        handleUpdateStepField('targetRef', event.target.value)
-                      }
-                      placeholder="例如 loginButton"
-                    />
-                  </label>
+                  <div className="form-grid-react compact-grid-react">
+                    <label className="field-label">
+                      <span>目标引用</span>
+                      <input
+                        value={stepForm.targetRef}
+                        onChange={(event) =>
+                          handleUpdateStepField('targetRef', event.target.value)
+                        }
+                        placeholder="例如 loginButton"
+                      />
+                    </label>
+                  </div>
                   <div className="form-grid-react compact-grid-react">
                     <label className="field-label">
                       <span>x 像素</span>
