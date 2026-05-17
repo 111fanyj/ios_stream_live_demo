@@ -9,6 +9,8 @@ const STEP_TYPE_OPTIONS = [
   { value: 'waitForImage', label: '按图片识别' },
   { value: 'loopUntilText', label: '循环查文字直到命中' },
   { value: 'loopUntilImage', label: '循环查图片直到命中' },
+  { value: 'executorCommand', label: '直接执行命令' },
+  { value: 'delay', label: '等待一段时间' },
   { value: 'tap', label: '点击' },
   { value: 'drag', label: '按下移动抬起' },
 ]
@@ -18,6 +20,8 @@ const STEP_TYPE_LABELS = {
   waitForImage: '查图片',
   loopUntilText: '循环查文字',
   loopUntilImage: '循环查图片',
+  executorCommand: '执行命令',
+  delay: '等待',
   tap: '点击',
   drag: '拖拽',
 }
@@ -45,6 +49,8 @@ const INITIAL_STEP_FORM = {
   threshold: '0.84',
   timeoutMs: '10000',
   pollIntervalMs: '500',
+  commandText: '',
+  delayMs: '500',
   loopActionType: 'tap',
   targetRef: '',
   targetX: '',
@@ -79,6 +85,14 @@ function isImageWaitType(type) {
 
 function isLoopType(type) {
   return type === 'loopUntilText' || type === 'loopUntilImage'
+}
+
+function isExecutorCommandType(type) {
+  return type === 'executorCommand'
+}
+
+function isDelayType(type) {
+  return type === 'delay'
 }
 
 function formatTimestamp(value) {
@@ -179,6 +193,14 @@ function formatStepSummary(step) {
     return `${formatTargetSummary(step.from)} -> ${formatTargetSummary(step.to)}`
   }
 
+  if (isExecutorCommandType(step.type)) {
+    return step.command || '未填写命令'
+  }
+
+  if (isDelayType(step.type)) {
+    return `等待 ${Number(step.delayMs || 0)} ms`
+  }
+
   return step.type
 }
 
@@ -218,6 +240,15 @@ function buildStepDetailLines(step) {
     lines.push(
       `hold ${Number(step.holdMs || 120)} ms / drag ${Number(step.durationMs || 450)} ms`,
     )
+  }
+
+  if (isExecutorCommandType(step.type)) {
+    lines.push(`命令: ${step.command || '未配置'}`)
+    lines.push(`超时 ${Number(step.timeoutMs || 15000)} ms`)
+  }
+
+  if (isDelayType(step.type)) {
+    lines.push(`等待 ${Number(step.delayMs || 0)} ms`)
   }
 
   if (isLoopType(step.type) && step.action) {
@@ -430,6 +461,37 @@ function buildStepFromForm(stepForm, currentStepCount) {
         id,
         type,
         target,
+      },
+    }
+  }
+
+  if (isExecutorCommandType(type)) {
+    const command = String(stepForm.commandText || '').trim()
+    if (!command) {
+      return { error: '执行命令步骤需要填写命令字符串' }
+    }
+
+    return {
+      step: {
+        id,
+        type,
+        command,
+        timeoutMs: readNumber(stepForm.timeoutMs, 15000),
+      },
+    }
+  }
+
+  if (isDelayType(type)) {
+    const delayMs = readNumber(stepForm.delayMs, 500)
+    if (delayMs < 0) {
+      return { error: '等待时长不能小于 0 ms' }
+    }
+
+    return {
+      step: {
+        id,
+        type,
+        delayMs,
       },
     }
   }
@@ -1177,6 +1239,8 @@ export function WorkbenchPage() {
   const showWaitFields =
     isTextWaitType(stepForm.type) || isImageWaitType(stepForm.type)
   const showLoopFields = isLoopType(stepForm.type)
+  const showCommandFields = isExecutorCommandType(stepForm.type)
+  const showDelayFields = isDelayType(stepForm.type)
   const effectiveActionType = showLoopFields
     ? stepForm.loopActionType
     : stepForm.type === 'tap'
@@ -1602,6 +1666,46 @@ export function WorkbenchPage() {
                     </label>
                   </div>
                 </>
+              ) : null}
+              {showCommandFields ? (
+                <div className="form-grid-react compact-grid-react">
+                  <label className="field-label">
+                    <span>命令字符串</span>
+                    <input
+                      value={stepForm.commandText}
+                      onChange={(event) =>
+                        handleUpdateStepField('commandText', event.target.value)
+                      }
+                      placeholder="例如 cmd run"
+                    />
+                  </label>
+                  <label className="field-label">
+                    <span>命令超时 ms</span>
+                    <input
+                      value={stepForm.timeoutMs}
+                      type="number"
+                      min="1000"
+                      onChange={(event) =>
+                        handleUpdateStepField('timeoutMs', event.target.value)
+                      }
+                    />
+                  </label>
+                </div>
+              ) : null}
+              {showDelayFields ? (
+                <div className="form-grid-react compact-grid-react">
+                  <label className="field-label">
+                    <span>等待时长 ms</span>
+                    <input
+                      value={stepForm.delayMs}
+                      type="number"
+                      min="0"
+                      onChange={(event) =>
+                        handleUpdateStepField('delayMs', event.target.value)
+                      }
+                    />
+                  </label>
+                </div>
               ) : null}
               {showLoopFields ? (
                 <div className="form-grid-react compact-grid-react">

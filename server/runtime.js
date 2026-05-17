@@ -2859,6 +2859,39 @@ function dispatchDragStep(session, step, fromTarget, toTarget, options = {}) {
   return true;
 }
 
+function dispatchCommandStep(session, step, options = {}) {
+  const command = String(step?.command || '').trim();
+  if (!command) {
+    finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 缺少命令字符串`, {
+      stepId: step.id,
+      sendStopCommand: false
+    });
+    return false;
+  }
+
+  const requestId = dispatchExecutorCommand(session, 'command', { command }, {
+    stepId: step.id,
+    timeoutMs: Number(options.timeoutMs ?? step.timeoutMs) || 15_000,
+    nextDelayMs: Number(options.nextDelayMs ?? step.postActionDelayMs) || 0
+  });
+  broadcastAutomationAction(session, step, 'command', { command, requestId });
+  return true;
+}
+
+function dispatchDelayStep(session, step) {
+  const delayMs = Math.max(0, Number(step?.delayMs) || 0);
+  broadcastAutomationAction(session, step, 'delay', { delayMs });
+  broadcastAutomationStatus(session, 'running', `步骤 ${step.id} 等待 ${delayMs} ms`, {
+    stepId: step.id,
+    detail: {
+      delayMs
+    }
+  });
+  session.currentStepIndex += 1;
+  scheduleAutomationStep(session, delayMs);
+  return true;
+}
+
 function dispatchLoopAction(session, step) {
   const action = step?.action;
   if (!action || typeof action !== 'object') {
@@ -3002,6 +3035,16 @@ function executeAutomationStep(session) {
 
   if (step.type === 'drag') {
     dispatchDragStep(session, step, step.from, step.to);
+    return;
+  }
+
+  if (step.type === 'executorCommand') {
+    dispatchCommandStep(session, step);
+    return;
+  }
+
+  if (step.type === 'delay') {
+    dispatchDelayStep(session, step);
     return;
   }
 

@@ -40,6 +40,14 @@ function describeAction(message) {
     return `${message.stepId || 'drag'} -> ${describePoint(command.frameFrom)} => ${describePoint(command.frameTo)}`;
   }
 
+   if (message.action === 'command') {
+    return `${message.stepId || 'command'} -> ${command.command || '未填写命令'}`;
+  }
+
+  if (message.action === 'delay') {
+    return `${message.stepId || 'delay'} -> 等待 ${Number(command.delayMs || 0)} ms`;
+  }
+
   return `${message.stepId || message.action || 'action'} 已下发`;
 }
 
@@ -51,6 +59,10 @@ function describeExecutorResult(message) {
 
   if (message.action === 'drag') {
     return `${message.status || 'unknown'} / ${describePoint(payload.from)} => ${describePoint(payload.to)}`;
+  }
+
+  if (message.action === 'command') {
+    return `${message.status || 'unknown'} / ${payload.command || 'command'}`;
   }
 
   return message.status || message.error || 'unknown';
