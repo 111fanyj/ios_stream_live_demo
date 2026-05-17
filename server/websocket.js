@@ -4,6 +4,7 @@ function registerWebSocketServer(wss, runtime) {
   const {
     automationSessions,
     calibrationSessions,
+    calibrationValidationSessions,
     debugFrameRequests,
     rooms,
     log,
@@ -29,6 +30,7 @@ function registerWebSocketServer(wss, runtime) {
     handleCalibrationColorFrameResult,
     registerCalibrationApp,
     startCalibrationSession,
+    startCalibrationValidationSession,
     handleCalibrationResult,
     sanitizePackageId,
     broadcastAutomationStatusSnapshot,
@@ -38,6 +40,7 @@ function registerWebSocketServer(wss, runtime) {
     handleExecutorResult,
     handleCalibrationExecutorResult,
     finalizeCalibrationSession,
+    finalizeCalibrationValidationSession,
     finalizeAutomationSession,
     broadcastAutomationEvent
   } = runtime;
@@ -352,6 +355,34 @@ function registerWebSocketServer(wss, runtime) {
         }
         return;
       }
+
+      if (message.type === 'calibration_validate_start') {
+        if (!['viewer', 'probe'].includes(ws.clientType)) {
+          safeSend(ws, { type: 'warning', message: 'Only viewer or probe clients can start calibration validation' });
+          return;
+        }
+
+        try {
+          startCalibrationValidationSession(ws.roomId, ws);
+        } catch (error) {
+          const room = getRoom(ws.roomId);
+          broadcastCalibrationPayload(ws.roomId, {
+            type: 'calibration_status',
+            roomId: ws.roomId,
+            sessionId: null,
+            ownerClientId: ws.clientId,
+            appClientId: room.calibrationAppId,
+            status: 'error',
+            message: error.message || '启动标定验证失败',
+            detail: {
+              mode: 'validation'
+            },
+            calibration: getCalibrationSummary(room),
+            updatedAt: new Date().toISOString()
+          });
+        }
+        return;
+      }
   
       if (message.type === 'calibration_result') {
         if (ws.clientType !== 'probe') {
@@ -549,6 +580,10 @@ function registerWebSocketServer(wss, runtime) {
             publisherId: ws.clientId
           });
         }
+
+        if (calibrationValidationSessions.has(ws.roomId)) {
+          finalizeCalibrationValidationSession(ws.roomId, 'error', 'Publisher 已断开');
+        }
       }
   
       if (ws.clientType === 'viewer') {
@@ -558,6 +593,11 @@ function registerWebSocketServer(wss, runtime) {
         const calibrationSession = calibrationSessions.get(ws.roomId);
         if (calibrationSession && calibrationSession.ownerClientId === ws.clientId) {
           finalizeCalibrationSession(ws.roomId, 'stopped', '标定发起端已断开');
+        }
+
+        const validationSession = calibrationValidationSessions.get(ws.roomId);
+        if (validationSession && validationSession.ownerClientId === ws.clientId) {
+          finalizeCalibrationValidationSession(ws.roomId, 'stopped', '验证发起端已断开');
         }
   
         const session = automationSessions.get(ws.roomId);
@@ -585,11 +625,21 @@ function registerWebSocketServer(wss, runtime) {
           if (calibrationSession && calibrationSession.appClientId === ws.clientId) {
             finalizeCalibrationSession(ws.roomId, 'error', '标定 App 已断开');
           }
+
+          const validationSession = calibrationValidationSessions.get(ws.roomId);
+          if (validationSession && validationSession.appClientId === ws.clientId) {
+            finalizeCalibrationValidationSession(ws.roomId, 'error', '标定 App 已断开');
+          }
         }
   
         const calibrationSession = calibrationSessions.get(ws.roomId);
         if (calibrationSession && calibrationSession.ownerClientId === ws.clientId) {
           finalizeCalibrationSession(ws.roomId, 'stopped', '标定发起端已断开');
+        }
+
+        const validationSession = calibrationValidationSessions.get(ws.roomId);
+        if (validationSession && validationSession.ownerClientId === ws.clientId) {
+          finalizeCalibrationValidationSession(ws.roomId, 'stopped', '验证发起端已断开');
         }
       }
   
@@ -600,11 +650,16 @@ function registerWebSocketServer(wss, runtime) {
         if (automationSessions.has(ws.roomId)) {
           finalizeAutomationSession(ws.roomId, 'error', 'Executor 已断开');
         }
+
+        if (calibrationValidationSessions.has(ws.roomId)) {
+          finalizeCalibrationValidationSession(ws.roomId, 'error', 'Executor 已断开');
+        }
       }
   
       if (!currentRoom.publisher && !currentRoom.executor && currentRoom.viewers.size === 0 && currentRoom.probes.size === 0) {
         debugFrameRequests.delete(ws.roomId);
         calibrationSessions.delete(ws.roomId);
+        calibrationValidationSessions.delete(ws.roomId);
         log('room_removed', { roomId: ws.roomId });
         rooms.delete(ws.roomId);
         return;

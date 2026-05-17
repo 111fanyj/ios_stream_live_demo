@@ -137,6 +137,8 @@ final class RemoteAutomationInspector {
     }
 
     private func collectRecognizedTexts(pixelBuffer: CVPixelBuffer, preferredQuery: String?) -> [RemoteRecognizedText] {
+        let sourceWidth = Double(max(1, CVPixelBufferGetWidth(pixelBuffer)))
+        let sourceHeight = Double(max(1, CVPixelBufferGetHeight(pixelBuffer)))
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
@@ -154,10 +156,10 @@ final class RemoteAutomationInspector {
 
         var results: [RemoteRecognizedText] = []
         for observation in request.results ?? [] {
-            let bounds = normalizedBounds(from: observation.boundingBox)
+            let bounds = pixelBounds(from: observation.boundingBox, imageWidth: sourceWidth, imageHeight: sourceHeight)
             let point = AutomationPoint(
-                x: observation.boundingBox.midX,
-                y: 1.0 - observation.boundingBox.midY
+                x: observation.boundingBox.midX * sourceWidth,
+                y: (1.0 - observation.boundingBox.midY) * sourceHeight
             )
             for candidate in observation.topCandidates(3) {
                 results.append(RemoteRecognizedText(
@@ -172,12 +174,12 @@ final class RemoteAutomationInspector {
         return results
     }
 
-    private func normalizedBounds(from rect: CGRect) -> [String: Double] {
+    private func pixelBounds(from rect: CGRect, imageWidth: Double, imageHeight: Double) -> [String: Double] {
         [
-            "x": rect.minX,
-            "y": 1.0 - rect.maxY,
-            "width": rect.width,
-            "height": rect.height
+            "x": rect.minX * imageWidth,
+            "y": (1.0 - rect.maxY) * imageHeight,
+            "width": rect.width * imageWidth,
+            "height": rect.height * imageHeight
         ]
     }
 
@@ -243,10 +245,14 @@ final class RemoteAutomationInspector {
             }
 
             let scanStep = imageScanStep(for: template)
-            let minX = Int((step.region?.x ?? 0) * Double(frame.width))
-            let minY = Int((step.region?.y ?? 0) * Double(frame.height))
-            let maxX = Int(((step.region?.x ?? 0) + (step.region?.width ?? 1)) * Double(frame.width)) - template.width
-            let maxY = Int(((step.region?.y ?? 0) + (step.region?.height ?? 1)) * Double(frame.height)) - template.height
+            let regionX = step.region?.x ?? 0
+            let regionY = step.region?.y ?? 0
+            let regionWidth = step.region?.width ?? Double(sourceWidth)
+            let regionHeight = step.region?.height ?? Double(sourceHeight)
+            let minX = Int((regionX / Double(sourceWidth)) * Double(frame.width))
+            let minY = Int((regionY / Double(sourceHeight)) * Double(frame.height))
+            let maxX = Int(((regionX + regionWidth) / Double(sourceWidth)) * Double(frame.width)) - template.width
+            let maxY = Int(((regionY + regionHeight) / Double(sourceHeight)) * Double(frame.height)) - template.height
 
             var bestScore = -Double.greatestFiniteMagnitude
             var bestX = 0
@@ -266,8 +272,8 @@ final class RemoteAutomationInspector {
                 continue
             }
 
-            let centerX = (Double(bestX) + Double(template.width) / 2.0) / Double(frame.width)
-            let centerY = (Double(bestY) + Double(template.height) / 2.0) / Double(frame.height)
+            let centerX = ((Double(bestX) + Double(template.width) / 2.0) / Double(frame.width)) * Double(sourceWidth)
+            let centerY = ((Double(bestY) + Double(template.height) / 2.0) / Double(frame.height)) * Double(sourceHeight)
             let match = RemoteImageMatch(
                 point: AutomationPoint(x: centerX, y: centerY),
                 score: bestScore,

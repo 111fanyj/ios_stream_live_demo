@@ -7,6 +7,7 @@ const automationRoot = path.join(__dirname, 'data', 'automation');
 const rooms = new Map();
 const automationSessions = new Map();
 const calibrationSessions = new Map();
+const calibrationValidationSessions = new Map();
 const debugFrameRequests = new Map();
 let nextClientId = 1;
 let nextAutomationSequence = 1;
@@ -31,11 +32,21 @@ const calibrationSampleSteps = [
   { id: 'raw-purple', label: '紫色点', dx: 92, dy: 192, color: '#af52de' }
 ];
 
+const calibrationValidationSteps = [
+  { id: 'validate-red', label: '验证红点', target: { x: 0.22, y: 0.24 }, color: '#ff2d55' },
+  { id: 'validate-green', label: '验证绿点', target: { x: 0.68, y: 0.28 }, color: '#34c759' },
+  { id: 'validate-blue', label: '验证蓝点', target: { x: 0.34, y: 0.66 }, color: '#007aff' },
+  { id: 'validate-orange', label: '验证橙点', target: { x: 0.78, y: 0.74 }, color: '#ff9500' }
+];
+
 const calibrationCaptureTimeoutMs = 6_000;
 const calibrationColorFrameTimeoutMs = 12_000;
 const calibrationMinimumSuccessfulSamples = 3;
 const calibrationEdgeMarginRatio = 0.05;
 const calibrationResidualFloorPixels = 12;
+const calibrationValidationMinimumPassCount = calibrationValidationSteps.length;
+const calibrationValidationMinimumErrorPx = 18;
+const calibrationValidationErrorRatio = 0.028;
 
 function log(...parts) {
   console.log(new Date().toISOString(), ...parts);
@@ -116,6 +127,8 @@ function getCalibrationSummary(room) {
     offsetX: room.calibration.offsetX,
     offsetY: room.calibration.offsetY,
     kPixelsPerHidUnit: room.calibration.kPixelsPerHidUnit ?? null,
+    homeX: room.calibration.homeX ?? null,
+    homeY: room.calibration.homeY ?? null,
     sourceFrameSize: room.calibration.sourceFrameSize ?? null,
     executorScreenSize: room.calibration.executorScreenSize ?? null,
     sampleCount: room.calibration.sampleCount ?? null,
@@ -310,7 +323,7 @@ function makeAutomationId(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${sequence.toString(36)}`;
 }
 
-function normalizePoint(point) {
+function parsePixelPoint(point) {
   if (!point || typeof point !== 'object') {
     return null;
   }
@@ -322,18 +335,18 @@ function normalizePoint(point) {
   }
 
   return {
-    x: Math.max(0, Math.min(1, x)),
-    y: Math.max(0, Math.min(1, y))
+    x,
+    y
   };
 }
 
-function regionContainsPoint(region, point) {
+function rectContainsPoint(region, point) {
   if (!region) {
     return true;
   }
 
-  const normalized = normalizePoint(point);
-  if (!normalized) {
+  const parsedPoint = parsePixelPoint(point);
+  if (!parsedPoint) {
     return false;
   }
 
@@ -341,10 +354,10 @@ function regionContainsPoint(region, point) {
   const regionY = Number(region.y ?? 0);
   const regionWidth = Number(region.width ?? 0);
   const regionHeight = Number(region.height ?? 0);
-  return normalized.x >= regionX &&
-    normalized.x <= regionX + regionWidth &&
-    normalized.y >= regionY &&
-    normalized.y <= regionY + regionHeight;
+  return parsedPoint.x >= regionX &&
+    parsedPoint.x <= regionX + regionWidth &&
+    parsedPoint.y >= regionY &&
+    parsedPoint.y <= regionY + regionHeight;
 }
 
 function matchesText(text, query, mode) {
@@ -379,27 +392,31 @@ function resolveAutomationTarget(session, target) {
   }
 
   if (typeof target.ref === 'string' && target.ref) {
-    return normalizePoint(session.variables[target.ref]);
+    return parsePixelPoint(session.variables[target.ref]);
   }
 
-  return normalizePoint(target);
+  return parsePixelPoint(target);
 }
 
-function applyCalibrationPoint(roomId, point) {
-  const normalized = normalizePoint(point);
-  if (!normalized) {
+function projectFramePointToRawHid(roomId, point) {
+  const framePoint = parsePixelPoint(point);
+  if (!framePoint) {
     return null;
   }
 
   const calibration = getRoom(roomId).calibration;
-  if (!calibration) {
-    return normalized;
+  const model = deriveCalibrationHomeModel(calibration);
+  if (!model) {
+    return null;
   }
 
-  return normalizePoint({
-    x: (normalized.x * calibration.scaleX) + (Number(calibration.offsetX) || 0),
-    y: (normalized.y * calibration.scaleY) + (Number(calibration.offsetY) || 0)
-  });
+  const x = Math.round((framePoint.x - model.homeX) / model.k);
+  const y = Math.round((framePoint.y - model.homeY) / model.k);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+    return null;
+  }
+
+  return { x, y };
 }
 
 function collectImageAssetIds(steps) {
@@ -427,6 +444,19 @@ function getAutomationSession(roomId, sessionId) {
 
 function getCalibrationSession(roomId, sessionId) {
   const session = calibrationSessions.get(roomId);
+  if (!session) {
+    return null;
+  }
+
+  if (sessionId && session.sessionId !== sessionId) {
+    return null;
+  }
+
+  return session;
+}
+
+function getCalibrationValidationSession(roomId, sessionId) {
+  const session = calibrationValidationSessions.get(roomId);
   if (!session) {
     return null;
   }
@@ -602,6 +632,31 @@ function finalizeCalibrationSession(roomId, status, message, options = {}) {
   broadcastCalibrationStatus(session, status, message, options.detail ?? null);
 }
 
+function finalizeCalibrationValidationSession(roomId, status, message, options = {}) {
+  const session = calibrationValidationSessions.get(roomId);
+  if (!session) {
+    return;
+  }
+
+  clearCalibrationTimer(session);
+  clearPendingCalibrationExecutor(session);
+  clearPendingCalibrationCapture(session);
+  if (session.pendingColorFrameRequest?.timeoutHandle) {
+    clearTimeout(session.pendingColorFrameRequest.timeoutHandle);
+  }
+  session.pendingColorFrameRequest = null;
+  calibrationValidationSessions.delete(roomId);
+
+  sendCalibrationCommand(roomId, {
+    type: 'calibration_command',
+    method: 'clearTapCapture',
+    sessionId: session.sessionId,
+    reason: message
+  });
+
+  broadcastCalibrationStatus(session, status, message, options.detail ?? null);
+}
+
 function median(values) {
   const sorted = values.filter((value) => Number.isFinite(value)).sort((left, right) => left - right);
   if (sorted.length === 0) {
@@ -649,6 +704,151 @@ function weightedAverage(entries) {
   }
 
   return weightedTotal / totalWeight;
+}
+
+function distanceBetweenPoints(left, right) {
+  const leftX = Number(left?.x);
+  const leftY = Number(left?.y);
+  const rightX = Number(right?.x);
+  const rightY = Number(right?.y);
+  if (!Number.isFinite(leftX) || !Number.isFinite(leftY) || !Number.isFinite(rightX) || !Number.isFinite(rightY)) {
+    return null;
+  }
+
+  return Math.sqrt((leftX - rightX) ** 2 + (leftY - rightY) ** 2);
+}
+
+function deriveCalibrationHomeModel(calibration) {
+  const k = Number(calibration?.kPixelsPerHidUnit);
+  const frameWidth = getFrameDimension(calibration?.sourceFrameSize, 'width');
+  const frameHeight = getFrameDimension(calibration?.sourceFrameSize, 'height');
+  if (!Number.isFinite(k) || k <= 0 || !frameWidth || !frameHeight) {
+    return null;
+  }
+
+  let homeX = Number(calibration?.homeX);
+  let homeY = Number(calibration?.homeY);
+  if (Number.isFinite(homeX) && Number.isFinite(homeY)) {
+    return { k, homeX, homeY, frameWidth, frameHeight };
+  }
+
+  const offsetX = Number(calibration?.offsetX);
+  const offsetY = Number(calibration?.offsetY);
+  const screenWidth = Number(calibration?.executorScreenSize?.width);
+  const screenHeight = Number(calibration?.executorScreenSize?.height);
+  if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY) ||
+      !Number.isFinite(screenWidth) || screenWidth <= 0 ||
+      !Number.isFinite(screenHeight) || screenHeight <= 0) {
+    return null;
+  }
+
+  homeX = -offsetX * k * screenWidth;
+  homeY = -offsetY * k * screenHeight;
+  if (!Number.isFinite(homeX) || !Number.isFinite(homeY)) {
+    return null;
+  }
+
+  return { k, homeX, homeY, frameWidth, frameHeight };
+}
+
+function buildCalibrationValidationPlan(calibration) {
+  const model = deriveCalibrationHomeModel(calibration);
+  if (!model) {
+    throw makeStatusError('当前标定缺少 homeX/homeY/k/sourceFrameSize，无法执行验证', 409);
+  }
+
+  return calibrationValidationSteps.map((step) => {
+    const requestedFramePx = {
+      x: step.target.x * model.frameWidth,
+      y: step.target.y * model.frameHeight
+    };
+    const dx = Math.round((requestedFramePx.x - model.homeX) / model.k);
+    const dy = Math.round((requestedFramePx.y - model.homeY) / model.k);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || dx <= 0 || dy <= 0) {
+      throw makeStatusError(`验证点 ${step.label} 无法转换为有效的 raw HID move`, 409);
+    }
+
+    const expectedFramePx = {
+      x: model.homeX + (model.k * dx),
+      y: model.homeY + (model.k * dy)
+    };
+    if (!Number.isFinite(expectedFramePx.x) || !Number.isFinite(expectedFramePx.y) ||
+        expectedFramePx.x <= 0 || expectedFramePx.x >= model.frameWidth ||
+        expectedFramePx.y <= 0 || expectedFramePx.y >= model.frameHeight) {
+      throw makeStatusError(`验证点 ${step.label} 预测落点超出屏幕范围`, 409);
+    }
+
+    return {
+      ...step,
+      expectedFramePx,
+      requestedFramePx,
+      dx,
+      dy
+    };
+  });
+}
+
+function calibrationValidationThresholdPx(frameWidth, frameHeight) {
+  return Math.max(
+    calibrationValidationMinimumErrorPx,
+    Math.min(frameWidth, frameHeight) * calibrationValidationErrorRatio
+  );
+}
+
+function buildCalibrationValidationReport(session, frameResult) {
+  const sourceFrameSize = frameResult.sourceFrameSize || frameResult.imageSize || {};
+  const frameWidth = getFrameDimension(sourceFrameSize, 'width');
+  const frameHeight = getFrameDimension(sourceFrameSize, 'height');
+  if (!frameWidth || !frameHeight) {
+    throw makeStatusError('验证截图尺寸缺失，无法校验结果', 500);
+  }
+
+  const detectionByStepId = new Map(
+    (Array.isArray(frameResult.detections) ? frameResult.detections : [])
+      .filter((detection) => typeof detection?.stepId === 'string' && detection.centerPx)
+      .map((detection) => [detection.stepId, detection])
+  );
+  const thresholdPx = calibrationValidationThresholdPx(frameWidth, frameHeight);
+  const steps = session.results.map((result) => {
+    const detection = detectionByStepId.get(result.stepId) || null;
+    const detectedFramePx = detection?.centerPx
+      ? {
+          x: Number(detection.centerPx.x),
+          y: Number(detection.centerPx.y)
+        }
+      : null;
+    const expectedFramePx = result.expectedFramePx;
+    const errorPx = detectedFramePx ? distanceBetweenPoints(expectedFramePx, detectedFramePx) : null;
+    const pass = Number.isFinite(errorPx) && errorPx <= thresholdPx;
+
+    return {
+      stepId: result.stepId,
+      label: result.label,
+      color: result.color,
+      dx: result.dx,
+      dy: result.dy,
+      requestedFramePx: result.requestedFramePx,
+      expectedFramePx,
+      appReportedPoint: result.appReportedPoint || null,
+      appSurfaceSize: result.appSurfaceSize || null,
+      detectedFramePx,
+      detectedBounds: detection?.bounds || null,
+      errorPx,
+      pass,
+      reason: detectedFramePx
+        ? (pass ? 'ok' : 'deviation_too_large')
+        : 'missing_detection'
+    };
+  });
+
+  const passCount = steps.filter((step) => step.pass).length;
+  return {
+    thresholdPx,
+    stepCount: steps.length,
+    passCount,
+    passed: passCount >= calibrationValidationMinimumPassCount,
+    steps
+  };
 }
 
 function solveCalibrationHomeModel(candidates) {
@@ -784,6 +984,8 @@ function buildRoomCalibrationFromColorFrame(samples, frameResult) {
     scaleY,
     offsetY,
     kPixelsPerHidUnit,
+    homeX: finalModel.homeX,
+    homeY: finalModel.homeY,
     sourceFrameSize: { width: frameWidth, height: frameHeight },
     imageSize: frameResult.imageSize || null,
     executorScreenSize: { width: executorScreenWidth, height: executorScreenHeight },
@@ -933,6 +1135,11 @@ function handleCalibrationColorFrameResult(roomId, message) {
       : 0
   });
 
+  const validationSession = getCalibrationValidationSession(roomId, message.sessionId);
+  if (validationSession) {
+    return handleCalibrationValidationColorFrameResult(roomId, message);
+  }
+
   const session = getCalibrationSession(roomId, message.sessionId);
   if (!session) {
     log('calibration_color_frame_result_ignored', {
@@ -1048,6 +1255,522 @@ function handleCalibrationColorFrameResult(roomId, message) {
     });
   }
 
+  return true;
+}
+
+function requestCalibrationValidationColorFrame(session) {
+  clearCalibrationTimer(session);
+  const requestId = makeAutomationId('calibration-validation-frame');
+  const startedAt = Date.now();
+  const expectedColors = session.results.map((result) => ({
+    stepId: result.stepId,
+    label: result.label,
+    color: result.color,
+    dx: result.dx,
+    dy: result.dy
+  }));
+
+  const timeoutHandle = setTimeout(() => {
+    const activeSession = getCalibrationValidationSession(session.roomId, session.sessionId);
+    if (!activeSession || activeSession.pendingColorFrameRequest?.requestId !== requestId) {
+      return;
+    }
+
+    const room = getRoom(session.roomId);
+    const elapsedMs = Date.now() - startedAt;
+    log('calibration_validation_frame_request_timeout', {
+      roomId: session.roomId,
+      sessionId: session.sessionId,
+      requestId,
+      elapsedMs,
+      stepCount: activeSession.results.length,
+      publisherOpen: isClientOpen(room.publisher),
+      publisherClientId: room.publisher?.clientId ?? null
+    });
+
+    finalizeCalibrationValidationSession(session.roomId, 'error', '等待 Broadcast 验证截图分析超时', {
+      detail: {
+        mode: 'validation',
+        requestId,
+        elapsedMs,
+        publisherOpen: isClientOpen(room.publisher),
+        publisherClientId: room.publisher?.clientId ?? null,
+        validation: {
+          stepCount: activeSession.results.length,
+          steps: activeSession.results
+        }
+      }
+    });
+  }, calibrationColorFrameTimeoutMs);
+
+  session.pendingColorFrameRequest = {
+    requestId,
+    startedAt,
+    timeoutHandle
+  };
+
+  const forwarded = sendToPublisher(session.roomId, {
+    type: 'calibration_color_frame_request',
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    requestId,
+    expectedColors,
+    edgeMarginRatio: calibrationEdgeMarginRatio
+  });
+
+  log('calibration_validation_frame_request_sent', {
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    requestId,
+    forwarded,
+    stepCount: session.results.length,
+    publisherOpen: isClientOpen(getRoom(session.roomId).publisher)
+  });
+
+  if (!forwarded) {
+    finalizeCalibrationValidationSession(session.roomId, 'error', 'Publisher 未连接，无法执行验证截图分析', {
+      detail: {
+        mode: 'validation',
+        validation: {
+          stepCount: session.results.length,
+          steps: session.results
+        }
+      }
+    });
+    return;
+  }
+
+  broadcastCalibrationStatus(session, 'analyzing', '已完成验证点击，正在请求 Broadcast 截图核对', {
+    mode: 'validation',
+    requestId,
+    stepCount: session.results.length,
+    steps: session.results
+  });
+}
+
+function handleCalibrationValidationColorFrameResult(roomId, message) {
+  const session = getCalibrationValidationSession(roomId, message.sessionId);
+  if (!session) {
+    log('calibration_validation_frame_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      requestId: message.requestId,
+      reason: 'session_not_found'
+    });
+    return false;
+  }
+
+  const pendingRequest = session.pendingColorFrameRequest;
+  if (!pendingRequest || pendingRequest.requestId !== message.requestId) {
+    log('calibration_validation_frame_result_ignored', {
+      roomId,
+      sessionId: session.sessionId,
+      requestId: message.requestId,
+      reason: 'request_mismatch'
+    });
+    return false;
+  }
+
+  if (pendingRequest.timeoutHandle) {
+    clearTimeout(pendingRequest.timeoutHandle);
+  }
+  const elapsedMs = typeof pendingRequest.startedAt === 'number'
+    ? Date.now() - pendingRequest.startedAt
+    : null;
+  session.pendingColorFrameRequest = null;
+
+  log('calibration_validation_frame_result_matched', {
+    roomId,
+    sessionId: session.sessionId,
+    requestId: message.requestId,
+    status: message.status ?? 'ok',
+    elapsedMs,
+    stepCount: session.results.length
+  });
+
+  if (message.status === 'error') {
+    finalizeCalibrationValidationSession(session.roomId, 'error', message.error || 'Broadcast 验证截图分析失败', {
+      detail: {
+        mode: 'validation',
+        validation: {
+          stepCount: session.results.length,
+          steps: session.results
+        }
+      }
+    });
+    return true;
+  }
+
+  try {
+    const frameResult = message.payload || {};
+    const validation = buildCalibrationValidationReport(session, frameResult);
+    const status = validation.passed ? 'completed' : 'error';
+    const resultMessage = validation.passed
+      ? `标定验证通过 (${validation.passCount}/${validation.stepCount})`
+      : `标定验证未通过 (${validation.passCount}/${validation.stepCount})`;
+
+    finalizeCalibrationValidationSession(session.roomId, status, resultMessage, {
+      detail: {
+        mode: 'validation',
+        validation,
+        frame: {
+          imageSize: frameResult.imageSize || null,
+          sourceFrameSize: frameResult.sourceFrameSize || null,
+          detections: frameResult.detections || []
+        }
+      }
+    });
+  } catch (error) {
+    finalizeCalibrationValidationSession(session.roomId, 'error', error.message || '验证结果计算失败', {
+      detail: {
+        mode: 'validation',
+        validation: {
+          stepCount: session.results.length,
+          steps: session.results
+        },
+        frame: message.payload || null
+      }
+    });
+  }
+
+  return true;
+}
+
+function scheduleCalibrationValidationStep(session, delayMs = 600) {
+  clearCalibrationTimer(session);
+  session.timer = setTimeout(() => {
+    const activeSession = getCalibrationValidationSession(session.roomId, session.sessionId);
+    if (activeSession) {
+      executeCalibrationValidationStep(activeSession);
+    }
+  }, delayMs);
+}
+
+function getCurrentCalibrationValidationStep(session) {
+  return session.steps[session.currentStepIndex] ?? null;
+}
+
+function dispatchCalibrationValidationTap(session, step) {
+  const requestId = makeAutomationId('calibration-validation-request');
+  const command = {
+    type: 'executor_command',
+    roomId: session.roomId,
+    sessionId: session.sessionId,
+    requestId,
+    action: 'calibrationRawTap',
+    stepId: step.id,
+    payload: {
+      dx: step.dx,
+      dy: step.dy,
+      color: step.color,
+      stepId: step.id
+    }
+  };
+
+  if (!sendToExecutor(session.roomId, command)) {
+    finalizeCalibrationValidationSession(session.roomId, 'error', 'Executor 当前不可用');
+    return;
+  }
+
+  const timeoutHandle = setTimeout(() => {
+    const activeSession = getCalibrationValidationSession(session.roomId, session.sessionId);
+    if (!activeSession || activeSession.pendingExecutorCommand?.requestId !== requestId) {
+      return;
+    }
+
+    finalizeCalibrationValidationSession(session.roomId, 'error', `验证点击 ${step.label} 超时`);
+  }, 15_000);
+
+  session.pendingExecutorCommand = {
+    requestId,
+    action: 'calibrationRawTap',
+    stepId: step.id,
+    timeoutHandle,
+    phase: 'validation',
+    label: step.label,
+    dx: step.dx,
+    dy: step.dy,
+    color: step.color,
+    expectedFramePx: step.expectedFramePx,
+    requestedFramePx: step.requestedFramePx
+  };
+
+  broadcastCalibrationStatus(session, 'dispatching', `已发送 HID 验证点击: ${step.label}`, {
+    mode: 'validation',
+    stepId: step.id,
+    label: step.label,
+    dx: step.dx,
+    dy: step.dy,
+    color: step.color,
+    expectedFramePx: step.expectedFramePx,
+    requestedFramePx: step.requestedFramePx,
+    stepIndex: session.currentStepIndex + 1,
+    stepCount: session.steps.length
+  });
+}
+
+function executeCalibrationValidationStep(session) {
+  if (session.pendingExecutorCommand || session.pendingCapture) {
+    return;
+  }
+
+  const room = getRoom(session.roomId);
+  if (!isClientOpen(room.executor)) {
+    finalizeCalibrationValidationSession(session.roomId, 'error', 'Executor 已断开');
+    return;
+  }
+
+  if (!isClientOpen(getCalibrationApp(session.roomId)) || room.calibrationAppId !== session.appClientId) {
+    finalizeCalibrationValidationSession(session.roomId, 'error', '标定 App 已断开');
+    return;
+  }
+
+  if (!isClientOpen(room.publisher)) {
+    finalizeCalibrationValidationSession(session.roomId, 'error', 'Publisher 已断开');
+    return;
+  }
+
+  const step = getCurrentCalibrationValidationStep(session);
+  if (!step) {
+    requestCalibrationValidationColorFrame(session);
+    return;
+  }
+
+  if (!sendCalibrationCommand(session.roomId, {
+    type: 'calibration_command',
+    method: 'armTapCapture',
+    sessionId: session.sessionId,
+    stepId: step.id,
+    label: step.label,
+    phase: 'validation',
+    targetFramePx: step.expectedFramePx,
+    dx: step.dx,
+    dy: step.dy,
+    color: step.color,
+    sampleIndex: session.currentStepIndex + 1,
+    sampleCount: session.steps.length
+  })) {
+    finalizeCalibrationValidationSession(session.roomId, 'error', '标定 App 当前不可用');
+    return;
+  }
+
+  broadcastCalibrationStatus(session, 'arming', `准备验证 ${step.label}`, {
+    mode: 'validation',
+    stepId: step.id,
+    label: step.label,
+    dx: step.dx,
+    dy: step.dy,
+    color: step.color,
+    expectedFramePx: step.expectedFramePx,
+    requestedFramePx: step.requestedFramePx,
+    stepIndex: session.currentStepIndex + 1,
+    stepCount: session.steps.length,
+    note: '将使用当前 calibration 推导 raw HID move，再由标定 App 回传实际落点并用 Broadcast 截图核对'
+  });
+
+  clearCalibrationTimer(session);
+  session.timer = setTimeout(() => {
+    const activeSession = getCalibrationValidationSession(session.roomId, session.sessionId);
+    if (activeSession) {
+      dispatchCalibrationValidationTap(activeSession, step);
+    }
+  }, 220);
+}
+
+function startCalibrationValidationSession(roomId, owner) {
+  const room = getRoom(roomId);
+  if (automationSessions.has(roomId)) {
+    throw makeStatusError('当前房间正在执行自动化，请先停止后再验证', 409);
+  }
+  if (calibrationSessions.has(roomId)) {
+    throw makeStatusError('当前房间正在执行标定，请等待完成后再验证', 409);
+  }
+  if (!room.calibration) {
+    throw makeStatusError('当前房间还没有可用的标定参数', 409);
+  }
+  if (!isClientOpen(room.executor)) {
+    throw makeStatusError('当前房间没有可用的 executor', 409);
+  }
+  if (!isClientOpen(getCalibrationApp(roomId))) {
+    throw makeStatusError('当前房间没有连接中的标定 App', 409);
+  }
+  if (!isClientOpen(room.publisher)) {
+    throw makeStatusError('当前房间没有连接中的 Broadcast publisher', 409);
+  }
+
+  if (calibrationValidationSessions.has(roomId)) {
+    finalizeCalibrationValidationSession(roomId, 'stopped', '被新的验证请求替换');
+  }
+
+  const steps = buildCalibrationValidationPlan(room.calibration);
+  const session = {
+    sessionId: makeAutomationId('calibration-validation-session'),
+    roomId,
+    ownerClientId: owner.clientId,
+    appClientId: room.calibrationAppId,
+    phase: 'validation',
+    currentStepIndex: 0,
+    steps,
+    results: [],
+    calibration: room.calibration ? { ...room.calibration } : null,
+    pendingExecutorCommand: null,
+    pendingCapture: null,
+    pendingColorFrameRequest: null,
+    timer: null,
+    createdAt: new Date().toISOString()
+  };
+
+  calibrationValidationSessions.set(roomId, session);
+  broadcastCalibrationStatus(session, 'starting', '开始验证当前标定参数', {
+    mode: 'validation',
+    stepCount: steps.length,
+    steps,
+    calibration: getCalibrationSummary(room),
+    note: '将按已计算的 homeX/homeY/kPixelsPerHidUnit 推导 raw HID move，并检查 Broadcast 截图落点是否符合预期'
+  });
+  broadcastCalibrationStatus(session, 'prepared', '已准备验证点，开始执行', {
+    mode: 'validation',
+    stepCount: steps.length,
+    steps
+  });
+  scheduleCalibrationValidationStep(session, 250);
+  return session;
+}
+
+function handleCalibrationValidationExecutorResult(roomId, message) {
+  const session = getCalibrationValidationSession(roomId, message.sessionId);
+  if (!session) {
+    return false;
+  }
+
+  const pendingCommand = session.pendingExecutorCommand;
+  if (!pendingCommand || pendingCommand.requestId !== message.requestId || pendingCommand.action !== message.action) {
+    log('calibration_validation_executor_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      requestId: message.requestId,
+      action: message.action,
+      reason: 'request_mismatch'
+    });
+    return false;
+  }
+
+  clearPendingCalibrationExecutor(session);
+  if (message.status !== 'ok') {
+    finalizeCalibrationValidationSession(session.roomId, 'error', message.error || `验证动作 ${message.action} 执行失败`);
+    return true;
+  }
+
+  const captureTimeout = setTimeout(() => {
+    const activeSession = getCalibrationValidationSession(session.roomId, session.sessionId);
+    if (!activeSession || activeSession.pendingCapture?.stepId !== pendingCommand.stepId) {
+      return;
+    }
+
+    finalizeCalibrationValidationSession(session.roomId, 'error', `等待 ${pendingCommand.label} 验证点击回传超时`);
+  }, calibrationCaptureTimeoutMs);
+
+  session.pendingCapture = {
+    stepId: pendingCommand.stepId,
+    label: pendingCommand.label,
+    phase: pendingCommand.phase,
+    dx: pendingCommand.dx,
+    dy: pendingCommand.dy,
+    color: pendingCommand.color,
+    expectedFramePx: pendingCommand.expectedFramePx,
+    requestedFramePx: pendingCommand.requestedFramePx,
+    executorPayload: message.payload || null,
+    timeoutHandle: captureTimeout
+  };
+
+  broadcastCalibrationStatus(session, 'awaiting_tap', `等待验证点击回传: ${pendingCommand.label}`, {
+    mode: 'validation',
+    stepId: pendingCommand.stepId,
+    label: pendingCommand.label,
+    dx: pendingCommand.dx,
+    dy: pendingCommand.dy,
+    color: pendingCommand.color,
+    expectedFramePx: pendingCommand.expectedFramePx,
+    requestedFramePx: pendingCommand.requestedFramePx,
+    executorPayload: message.payload || null,
+    stepIndex: session.currentStepIndex + 1,
+    stepCount: session.steps.length
+  });
+  return true;
+}
+
+function handleCalibrationValidationResult(roomId, source, message) {
+  const session = getCalibrationValidationSession(roomId, message.sessionId);
+  if (!session) {
+    return false;
+  }
+
+  if (source.clientId !== session.appClientId) {
+    safeSend(source, { type: 'error', message: 'Only the registered calibration app can report validation taps' });
+    return true;
+  }
+
+  const pendingCapture = session.pendingCapture;
+  if (!pendingCapture || pendingCapture.stepId !== message.stepId) {
+    log('calibration_validation_result_ignored', {
+      roomId,
+      sessionId: message.sessionId,
+      stepId: message.stepId,
+      reason: 'capture_not_armed'
+    });
+    return true;
+  }
+
+  const actualPoint = parsePixelPoint(message.point);
+  if (!actualPoint) {
+    safeSend(source, { type: 'error', message: 'Validation point is missing or invalid' });
+    return true;
+  }
+
+  const appSurfaceSize = parsePixelPoint(message.surfaceSize);
+
+  clearPendingCalibrationCapture(session);
+  const step = getCurrentCalibrationValidationStep(session);
+  if (!step || step.id !== message.stepId) {
+    finalizeCalibrationValidationSession(session.roomId, 'error', '验证步骤与回传点击不一致');
+    return true;
+  }
+
+  session.results.push({
+    stepId: step.id,
+    label: step.label,
+    color: step.color,
+    dx: pendingCapture.dx,
+    dy: pendingCapture.dy,
+    requestedFramePx: pendingCapture.requestedFramePx,
+    expectedFramePx: pendingCapture.expectedFramePx,
+    appReportedPoint: actualPoint,
+    appSurfaceSize,
+    executorPayload: pendingCapture.executorPayload || null
+  });
+
+  broadcastCalibrationStatus(session, 'captured', `已回传验证点击 ${step.label}`, {
+    mode: 'validation',
+    stepId: step.id,
+    label: step.label,
+    dx: pendingCapture.dx,
+    dy: pendingCapture.dy,
+    color: step.color,
+    requestedFramePx: pendingCapture.requestedFramePx,
+    expectedFramePx: pendingCapture.expectedFramePx,
+    appReportedPoint: actualPoint,
+    appSurfaceSize,
+    stepIndex: session.currentStepIndex + 1,
+    stepCount: session.steps.length
+  });
+
+  session.currentStepIndex += 1;
+  if (session.currentStepIndex >= session.steps.length) {
+    requestCalibrationValidationColorFrame(session);
+    return true;
+  }
+
+  scheduleCalibrationValidationStep(session, 520);
   return true;
 }
 
@@ -1225,6 +1948,9 @@ function startCalibrationSession(roomId, owner) {
   if (automationSessions.has(roomId)) {
     throw makeStatusError('当前房间正在执行自动化，请先停止后再标定', 409);
   }
+  if (calibrationValidationSessions.has(roomId)) {
+    throw makeStatusError('当前房间正在执行标定验证，请等待完成后再重新标定', 409);
+  }
   if (!isClientOpen(room.executor)) {
     throw makeStatusError('当前房间没有可用的 executor', 409);
   }
@@ -1269,6 +1995,10 @@ function startCalibrationSession(roomId, owner) {
 }
 
 function handleCalibrationExecutorResult(roomId, message) {
+  if (handleCalibrationValidationExecutorResult(roomId, message)) {
+    return;
+  }
+
   const session = getCalibrationSession(roomId, message.sessionId);
   if (!session) {
     log('calibration_executor_result_ignored', {
@@ -1332,6 +2062,10 @@ function handleCalibrationExecutorResult(roomId, message) {
 }
 
 function handleCalibrationResult(roomId, source, message) {
+  if (handleCalibrationValidationResult(roomId, source, message)) {
+    return;
+  }
+
   const session = getCalibrationSession(roomId, message.sessionId);
   if (!session) {
     log('calibration_result_ignored', {
@@ -1359,7 +2093,7 @@ function handleCalibrationResult(roomId, source, message) {
     return;
   }
 
-  const actualPoint = normalizePoint(message.point);
+  const actualPoint = parsePixelPoint(message.point);
   if (!actualPoint) {
     safeSend(source, { type: 'error', message: 'Calibration point is missing or invalid' });
     return;
@@ -1912,8 +2646,8 @@ function selectTextMatch(step, payload) {
       continue;
     }
 
-    const point = normalizePoint(candidate?.point);
-    if (!point || !regionContainsPoint(step.region, point)) {
+    const point = parsePixelPoint(candidate?.point);
+    if (!point || !rectContainsPoint(step.region, point)) {
       continue;
     }
 
@@ -1933,14 +2667,14 @@ function selectImageMatch(step, payload) {
     return null;
   }
 
-  const point = normalizePoint(match.point);
+  const point = parsePixelPoint(match.point);
   const score = Number(match.score);
   const scaleMultiplier = Number(match.scaleMultiplier);
   if (!point || !Number.isFinite(score)) {
     return null;
   }
 
-  if (!regionContainsPoint(step.region, point)) {
+  if (!rectContainsPoint(step.region, point)) {
     return null;
   }
 
@@ -2051,17 +2785,17 @@ function executeAutomationStep(session) {
   }
 
   if (step.type === 'tap') {
-    const rawPoint = resolveAutomationTarget(session, step.target);
-    if (!rawPoint) {
+    const framePoint = resolveAutomationTarget(session, step.target);
+    if (!framePoint) {
       finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标不存在`, {
         stepId: step.id
       });
       return;
     }
 
-    const point = applyCalibrationPoint(session.roomId, rawPoint);
+    const point = projectFramePointToRawHid(session.roomId, framePoint);
     if (!point) {
-      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标校正失败`, {
+      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的点击目标无法转换为 raw HID`, {
         stepId: step.id
       });
       return;
@@ -2072,24 +2806,24 @@ function executeAutomationStep(session) {
       timeoutMs: 15_000,
       nextDelayMs: Number(step.postActionDelayMs) || 350
     });
-    broadcastAutomationAction(session, step, 'tap', { point, rawPoint, requestId });
+    broadcastAutomationAction(session, step, 'tap', { point, framePoint, requestId });
     return;
   }
 
   if (step.type === 'drag') {
-    const rawFrom = resolveAutomationTarget(session, step.from);
-    const rawTo = resolveAutomationTarget(session, step.to);
-    if (!rawFrom || !rawTo) {
+    const frameFrom = resolveAutomationTarget(session, step.from);
+    const frameTo = resolveAutomationTarget(session, step.to);
+    if (!frameFrom || !frameTo) {
       finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标不存在`, {
         stepId: step.id
       });
       return;
     }
 
-    const from = applyCalibrationPoint(session.roomId, rawFrom);
-    const to = applyCalibrationPoint(session.roomId, rawTo);
+    const from = projectFramePointToRawHid(session.roomId, frameFrom);
+    const to = projectFramePointToRawHid(session.roomId, frameTo);
     if (!from || !to) {
-      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标校正失败`, {
+      finalizeAutomationSession(session.roomId, 'error', `步骤 ${step.id} 的拖拽目标无法转换为 raw HID`, {
         stepId: step.id
       });
       return;
@@ -2107,8 +2841,8 @@ function executeAutomationStep(session) {
       nextDelayMs: Number(step.postActionDelayMs) || 500
     });
     broadcastAutomationAction(session, step, 'drag', {
-      rawFrom,
-      rawTo,
+      frameFrom,
+      frameTo,
       ...command,
       requestId
     });
@@ -2176,6 +2910,12 @@ async function startAutomationSession(roomId, viewer, packageId, revision) {
 
   if (automationSessions.has(roomId)) {
     finalizeAutomationSession(roomId, 'stopped', '被新的执行请求替换');
+  }
+  if (calibrationSessions.has(roomId)) {
+    throw makeStatusError('当前房间正在执行标定，请等待完成后再启动自动化', 409);
+  }
+  if (calibrationValidationSessions.has(roomId)) {
+    throw makeStatusError('当前房间正在执行标定验证，请等待完成后再启动自动化', 409);
   }
 
   const session = {
@@ -2359,6 +3099,7 @@ module.exports = {
   rooms,
   automationSessions,
   calibrationSessions,
+  calibrationValidationSessions,
   debugFrameRequests,
   log,
   makeStatusError,
@@ -2382,23 +3123,26 @@ module.exports = {
   sendToPublisher,
   sendToExecutor,
   makeAutomationId,
-  normalizePoint,
-  regionContainsPoint,
+  parsePixelPoint,
+  rectContainsPoint,
   matchesText,
   normalizeMatchText,
   resolveAutomationTarget,
-  applyCalibrationPoint,
+  projectFramePointToRawHid,
   collectImageAssetIds,
   getAutomationSession,
   getCalibrationSession,
+  getCalibrationValidationSession,
   handleDebugFrameResult,
   broadcastAutomationPayload,
   broadcastCalibrationPayload,
   broadcastCalibrationStatus,
   sendCalibrationCommand,
   finalizeCalibrationSession,
+  finalizeCalibrationValidationSession,
   handleCalibrationColorFrameResult,
   startCalibrationSession,
+  startCalibrationValidationSession,
   handleCalibrationExecutorResult,
   handleCalibrationResult,
   registerCalibrationApp,

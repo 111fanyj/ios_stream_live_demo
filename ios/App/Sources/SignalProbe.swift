@@ -11,7 +11,7 @@ struct CalibrationCommandState: Equatable {
     let stepID: String
     let label: String
     let phase: String
-    let target: CalibrationPoint
+    let targetFramePx: CalibrationPoint?
     let colorHex: String
     let rawMoveDX: Int?
     let rawMoveDY: Int?
@@ -140,7 +140,7 @@ final class SignalProbe {
         appendLog("已清空标定状态")
     }
 
-    func reportCalibrationTap(_ point: CalibrationPoint) {
+    func reportCalibrationTap(_ point: CalibrationPoint, surfaceSize: CGSize) {
         guard state == .connected else {
             appendLog("标定点击已忽略：probe 未连接")
             return
@@ -158,6 +158,10 @@ final class SignalProbe {
             "point": [
                 "x": point.x,
                 "y": point.y
+            ],
+            "surfaceSize": [
+                "width": surfaceSize.width,
+                "height": surfaceSize.height
             ],
             "reportedAt": isoFormatter.string(from: Date())
         ]) else {
@@ -359,20 +363,20 @@ final class SignalProbe {
             guard let sessionID = json["sessionId"] as? String,
                   let stepID = json["stepId"] as? String,
                   let label = json["label"] as? String,
-                  let phase = json["phase"] as? String,
-                  let targetPayload = json["target"] as? [String: Any],
-                  let target = decodeCalibrationPoint(targetPayload)
+                  let phase = json["phase"] as? String
             else {
                 appendLog("收到无效的 calibration_command")
                 return
             }
+
+            let targetFramePx = decodeCalibrationPoint(json["targetFramePx"] as? [String: Any])
 
             calibrationCommand = CalibrationCommandState(
                 sessionID: sessionID,
                 stepID: stepID,
                 label: label,
                 phase: phase,
-                target: target,
+                targetFramePx: targetFramePx,
                 colorHex: json["color"] as? String ?? "#34c759",
                 rawMoveDX: json["dx"] as? Int ?? (json["dx"] as? NSNumber)?.intValue,
                 rawMoveDY: json["dy"] as? Int ?? (json["dy"] as? NSNumber)?.intValue
@@ -380,8 +384,13 @@ final class SignalProbe {
             isCalibrationSessionActive = true
             isCalibrationTapArmed = true
             calibrationStatus = "等待采集 \(label) 点击"
-            calibrationResultSummary = "目标点: (\(format(target.x)), \(format(target.y))) / phase=\(phase)"
-            appendLog("calibration_command armTapCapture step=\(stepID) target=(\(format(target.x)), \(format(target.y)))")
+            if let targetFramePx {
+                calibrationResultSummary = "目标截图像素: (\(format(targetFramePx.x)), \(format(targetFramePx.y))) / phase=\(phase)"
+                appendLog("calibration_command armTapCapture step=\(stepID) targetFramePx=(\(format(targetFramePx.x)), \(format(targetFramePx.y)))")
+            } else {
+                calibrationResultSummary = "phase=\(phase)"
+                appendLog("calibration_command armTapCapture step=\(stepID)")
+            }
         case "clearTapCapture":
             calibrationCommand = nil
             isCalibrationTapArmed = false
@@ -424,7 +433,11 @@ final class SignalProbe {
         appendLog("calibration_status: \(status) \(message)")
     }
 
-    private func decodeCalibrationPoint(_ value: [String: Any]) -> CalibrationPoint? {
+    private func decodeCalibrationPoint(_ value: [String: Any]?) -> CalibrationPoint? {
+        guard let value else {
+            return nil
+        }
+
         guard let x = value["x"] as? Double ?? (value["x"] as? NSNumber)?.doubleValue,
               let y = value["y"] as? Double ?? (value["y"] as? NSNumber)?.doubleValue
         else {

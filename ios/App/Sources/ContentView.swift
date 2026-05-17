@@ -350,7 +350,9 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
 
                         if let command = signalProbe.calibrationCommand {
-                            Text("当前步骤: \(command.label) / 目标点 \(formatCalibrationPoint(command.target)) / phase=\(command.phase)")
+                            Text(command.targetFramePx != nil
+                                 ? "当前步骤: \(command.label) / 目标截图像素 \(formatCalibrationPoint(command.targetFramePx!)) / phase=\(command.phase)"
+                                 : "当前步骤: \(command.label) / phase=\(command.phase)")
                                 .font(.footnote)
                                 .foregroundStyle(signalProbe.isCalibrationTapArmed ? .green : .secondary)
                         } else {
@@ -364,8 +366,8 @@ struct ContentView: View {
                             lastTap: signalProbe.lastCalibrationTap,
                             tapMarkers: signalProbe.calibrationTapMarkers,
                             isArmed: signalProbe.isCalibrationTapArmed
-                        ) { point in
-                            signalProbe.reportCalibrationTap(point)
+                        ) { point, surfaceSize in
+                            signalProbe.reportCalibrationTap(point, surfaceSize: surfaceSize)
                         }
                         .frame(maxWidth: .infinity)
 
@@ -537,7 +539,7 @@ struct ContentView: View {
     }
 
     private func formatCalibrationPoint(_ point: CalibrationPoint) -> String {
-        "(\(String(format: "%.3f", point.x)), \(String(format: "%.3f", point.y)))"
+        "(\(String(format: "%.1f", point.x)), \(String(format: "%.1f", point.y))) px"
     }
 
     private func testServerConnection() async {
@@ -615,7 +617,7 @@ private struct CalibrationSurfaceView: View {
     let showOverlayText: Bool
     let showChrome: Bool
     let showMarkerLabels: Bool
-    let onTap: (CalibrationPoint) -> Void
+    let onTap: (CalibrationPoint, CGSize) -> Void
 
     init(
         activeCommand: CalibrationCommandState?,
@@ -626,7 +628,7 @@ private struct CalibrationSurfaceView: View {
         showOverlayText: Bool = true,
         showChrome: Bool = true,
         showMarkerLabels: Bool = true,
-        onTap: @escaping (CalibrationPoint) -> Void
+        onTap: @escaping (CalibrationPoint, CGSize) -> Void
     ) {
         self.activeCommand = activeCommand
         self.lastTap = lastTap
@@ -670,15 +672,6 @@ private struct CalibrationSurfaceView: View {
                     .padding(16)
                 }
 
-                if isArmed, let command = activeCommand {
-                    calibrationMarker(
-                        title: command.label,
-                        point: command.target,
-                        color: color(from: command.colorHex, fallback: .orange),
-                        size: size
-                    )
-                }
-
                 ForEach(tapMarkers, id: \.stepID) { marker in
                     calibrationMarker(
                         title: marker.label,
@@ -708,10 +701,10 @@ private struct CalibrationSurfaceView: View {
                         }
 
                         let point = CalibrationPoint(
-                            x: min(1, max(0, value.location.x / size.width)),
-                            y: min(1, max(0, value.location.y / size.height))
+                            x: value.location.x,
+                            y: value.location.y
                         )
-                        onTap(point)
+                        onTap(point, size)
                     }
             )
         }
@@ -721,8 +714,8 @@ private struct CalibrationSurfaceView: View {
     @ViewBuilder
     private func calibrationMarker(title: String, point: CalibrationPoint, color: Color, size: CGSize) -> some View {
         let markerSize: CGFloat = showChrome ? 8 : 6
-        let centerX = max(0, min(size.width, CGFloat(point.x) * size.width))
-        let centerY = max(0, min(size.height, CGFloat(point.y) * size.height))
+        let centerX = max(0, min(size.width, CGFloat(point.x)))
+        let centerY = max(0, min(size.height, CGFloat(point.y)))
 
         Circle()
             .fill(color)
@@ -763,8 +756,8 @@ private struct CalibrationFullscreenView: View {
                 showOverlayText: false,
                 showChrome: false,
                 showMarkerLabels: false
-            ) { point in
-                signalProbe.reportCalibrationTap(point)
+            ) { point, surfaceSize in
+                signalProbe.reportCalibrationTap(point, surfaceSize: surfaceSize)
             }
             .ignoresSafeArea()
         }

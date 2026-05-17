@@ -239,7 +239,23 @@
         height: 8px;
         border-radius: 50%;
         transform: translate(-50%, -50%);
+        background: var(--point-color, #34c759);
         box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+      }
+
+      .reference-point.expected {
+        width: 14px;
+        height: 14px;
+        background: transparent;
+        border: 2px solid var(--point-color, #34c759);
+      }
+
+      .reference-point.app {
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+        background: transparent;
+        border: 2px solid var(--point-color, #34c759);
       }
 
       .reference-label {
@@ -435,6 +451,7 @@
             <button id="connectButton" class="secondary" type="button">连接调试通道</button>
             <button id="requestButton" class="primary" type="button" disabled>发送内存帧请求</button>
             <button id="calibrationButton" class="secondary" type="button" disabled>开始 3 点标定</button>
+            <button id="validateCalibrationButton" class="secondary" type="button" disabled>验证当前标定</button>
           </div>
 
           <div class="status-strip">
@@ -522,6 +539,7 @@
       const connectButton = document.getElementById('connectButton');
       const requestButton = document.getElementById('requestButton');
       const calibrationButton = document.getElementById('calibrationButton');
+      const validateCalibrationButton = document.getElementById('validateCalibrationButton');
       const socketStatus = document.getElementById('socketStatus');
       const publisherStatus = document.getElementById('publisherStatus');
       const calibrationAppStatus = document.getElementById('calibrationAppStatus');
@@ -548,6 +566,7 @@
       let lastRequestId = null;
       let pendingRequestTimer = null;
       let roomHasCalibrationApp = false;
+      let roomCalibration = null;
 
       serverUrlInput.value = params.get('server') || defaultServerUrl;
       roomIdInput.value = params.get('roomId') || 'demo-room';
@@ -566,6 +585,7 @@
       function updateActionButtons(connected) {
         requestButton.disabled = !connected;
         calibrationButton.disabled = !connected || !roomHasCalibrationApp;
+        validateCalibrationButton.disabled = !connected || !roomHasCalibrationApp || !roomCalibration;
       }
 
       function buildSocketUrl() {
@@ -579,6 +599,7 @@
       function setConnectedState(connected) {
         if (!connected) {
           roomHasCalibrationApp = false;
+          roomCalibration = null;
           setPill(calibrationAppStatus, '标定 App 未连接', 'warn');
         }
         updateActionButtons(connected);
@@ -587,6 +608,7 @@
       }
 
       function renderCalibrationSummary(message) {
+        roomCalibration = message.calibration || null;
         const detail = message.detail == null
           ? '无详细信息'
           : JSON.stringify(message.detail, null, 2);
@@ -608,6 +630,40 @@
 
       function calibrationReferencePoints(message) {
         const detail = message.detail || {};
+        const validationSteps = Array.isArray(detail.validation?.steps) ? detail.validation.steps : [];
+        if (validationSteps.length > 0) {
+          const points = [];
+          for (const step of validationSteps) {
+            if (step.expectedFramePx) {
+              points.push({
+                label: `E ${step.label}`,
+                color: step.color || '#34c759',
+                centerPx: step.expectedFramePx,
+                kind: 'expected'
+              });
+            }
+            if (step.appReportedFramePx) {
+              points.push({
+                label: `A ${step.label}${Number.isFinite(step.appErrorPx) ? ` · ${Math.round(step.appErrorPx)}px` : ''}`,
+                color: step.color || '#34c759',
+                centerPx: step.appReportedFramePx,
+                kind: 'app'
+              });
+            }
+            if (step.detectedFramePx) {
+              points.push({
+                label: `D ${step.label}${Number.isFinite(step.errorPx) ? ` · ${Math.round(step.errorPx)}px` : ''}`,
+                color: step.color || '#34c759',
+                centerPx: step.detectedFramePx,
+                kind: 'detected'
+              });
+            }
+          }
+          if (points.length > 0) {
+            return points;
+          }
+        }
+
         const detections = Array.isArray(detail.frame?.detections) ? detail.frame.detections : [];
         if (detections.length > 0) {
           return detections
@@ -616,7 +672,8 @@
               label: detection.label || detection.stepId || 'point',
               color: detection.color || '#34c759',
               centerPx: detection.centerPx,
-              area: detection.area
+              area: detection.area,
+              kind: 'detected'
             }));
         }
 
@@ -627,7 +684,8 @@
             label: sample.label || sample.stepId || 'point',
             color: sample.color || '#34c759',
             centerPx: sample.centerPx,
-            area: sample.area
+            area: sample.area,
+            kind: 'detected'
           }));
       }
 
@@ -645,7 +703,8 @@
 
         calibrationReference.hidden = false;
         calibrationReferenceFrame.style.aspectRatio = `${width} / ${height}`;
-        calibrationReferenceMeta.textContent = `${Math.round(width)} x ${Math.round(height)} px · ${points.length} 点`;
+        const mode = message.detail?.mode === 'validation' ? '验证' : '标定';
+        calibrationReferenceMeta.textContent = `${mode}参考 · ${Math.round(width)} x ${Math.round(height)} px · ${points.length} 点`;
         const canReuseFrameImage = frameImage.src &&
           !frameImage.hidden &&
           Math.abs(Number(frameImage.naturalWidth) - width) <= 2 &&
@@ -668,10 +727,10 @@
           const top = Math.max(0, Math.min(100, (y / height) * 100));
 
           const dot = document.createElement('div');
-          dot.className = 'reference-point';
+          dot.className = `reference-point${point.kind ? ` ${point.kind}` : ''}`;
           dot.style.left = `${left}%`;
           dot.style.top = `${top}%`;
-          dot.style.background = point.color;
+          dot.style.setProperty('--point-color', point.color || '#34c759');
 
           const label = document.createElement('div');
           label.className = 'reference-label';
@@ -786,6 +845,7 @@
         const message = JSON.parse(event.data);
         if (message.type === 'room_state') {
           roomHasCalibrationApp = Boolean(message.hasCalibrationApp);
+          roomCalibration = message.calibration || null;
           setPill(
             publisherStatus,
             message.hasPublisher ? `Publisher 在线 · ${message.publisherId || 'unknown'}` : 'Publisher 不在线',
@@ -798,6 +858,8 @@
           );
           if (message.calibration) {
             setPill(calibrationStatus, '已有标定参数', 'ok');
+          } else {
+            setPill(calibrationStatus, '未标定', 'warn');
           }
           updateActionButtons(true);
           appendLog(`room_state hasPublisher=${Boolean(message.hasPublisher)} hasCalibrationApp=${roomHasCalibrationApp} viewerCount=${message.viewerCount || 0} probeCount=${message.probeCount || 0}`);
@@ -948,9 +1010,37 @@
         }));
       }
 
+      function startCalibrationValidation() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          appendLog('调试通道未连接');
+          return;
+        }
+
+        if (!roomHasCalibrationApp) {
+          setPill(calibrationStatus, '缺少标定 App', 'danger');
+          calibrationSummary.textContent = '当前房间还没有连接中的标定 App，无法执行标定验证。';
+          appendLog('calibration_validate_start blocked: calibration app is not connected');
+          return;
+        }
+
+        if (!roomCalibration) {
+          setPill(calibrationStatus, '缺少标定参数', 'danger');
+          calibrationSummary.textContent = '当前房间还没有可用的 calibration。请先完成一次标定，再执行验证。';
+          appendLog('calibration_validate_start blocked: calibration is missing');
+          return;
+        }
+
+        setPill(calibrationStatus, '验证启动中', 'warn');
+        calibrationSummary.textContent = '正在请求服务端启动标定验证...';
+        socket.send(JSON.stringify({
+          type: 'calibration_validate_start'
+        }));
+      }
+
       connectButton.addEventListener('click', connectSocket);
       requestButton.addEventListener('click', requestDebugFrame);
       calibrationButton.addEventListener('click', startCalibration);
+      validateCalibrationButton.addEventListener('click', startCalibrationValidation);
 
       if (params.get('autoconnect') !== '0') {
         connectSocket();

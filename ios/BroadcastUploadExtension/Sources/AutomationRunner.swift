@@ -242,6 +242,9 @@ final class AutomationRunner {
             return nil
         }
 
+        let sourceWidth = Double(max(1, CVPixelBufferGetWidth(pixelBuffer)))
+        let sourceHeight = Double(max(1, CVPixelBufferGetHeight(pixelBuffer)))
+
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
@@ -264,7 +267,10 @@ final class AutomationRunner {
             }
 
             let rect = observation.boundingBox
-            let point = AutomationPoint(x: rect.midX, y: 1.0 - rect.midY)
+            let point = AutomationPoint(
+                x: rect.midX * sourceWidth,
+                y: (1.0 - rect.midY) * sourceHeight
+            )
             if step.region?.contains(point) ?? true {
                 return point
             }
@@ -330,10 +336,14 @@ final class AutomationRunner {
             }
 
             let scanStep = imageScanStep(for: template)
-            let minX = Int((step.region?.x ?? 0) * Double(frame.width))
-            let minY = Int((step.region?.y ?? 0) * Double(frame.height))
-            let maxX = Int(((step.region?.x ?? 0) + (step.region?.width ?? 1)) * Double(frame.width)) - template.width
-            let maxY = Int(((step.region?.y ?? 0) + (step.region?.height ?? 1)) * Double(frame.height)) - template.height
+            let regionX = step.region?.x ?? 0
+            let regionY = step.region?.y ?? 0
+            let regionWidth = step.region?.width ?? Double(sourceWidth)
+            let regionHeight = step.region?.height ?? Double(sourceHeight)
+            let minX = Int((regionX / Double(sourceWidth)) * Double(frame.width))
+            let minY = Int((regionY / Double(sourceHeight)) * Double(frame.height))
+            let maxX = Int(((regionX + regionWidth) / Double(sourceWidth)) * Double(frame.width)) - template.width
+            let maxY = Int(((regionY + regionHeight) / Double(sourceHeight)) * Double(frame.height)) - template.height
 
             var candidateBestScore = -Double.greatestFiniteMagnitude
             var bestX = 0
@@ -354,8 +364,12 @@ final class AutomationRunner {
             }
 
             bestScore = candidateBestScore
-            let centerX = (Double(bestX) + Double(template.width) / 2.0) / Double(frame.width)
-            let centerY = (Double(bestY) + Double(template.height) / 2.0) / Double(frame.height)
+            let templateHalfWidth = Double(template.width) / 2.0
+            let templateHalfHeight = Double(template.height) / 2.0
+            let centerXInScaledFrame = (Double(bestX) + templateHalfWidth) / Double(frame.width)
+            let centerYInScaledFrame = (Double(bestY) + templateHalfHeight) / Double(frame.height)
+            let centerX = centerXInScaledFrame * Double(sourceWidth)
+            let centerY = centerYInScaledFrame * Double(sourceHeight)
             bestPoint = AutomationPoint(x: centerX, y: centerY)
         }
 
@@ -489,7 +503,7 @@ final class AutomationRunner {
             return nil
         }
 
-        return AutomationPoint(x: max(0, min(1, x)), y: max(0, min(1, y)))
+        return AutomationPoint(x: x, y: y)
     }
 
     private func emitTap(step: AutomationStep, point: AutomationPoint) {

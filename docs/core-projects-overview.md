@@ -102,7 +102,7 @@ flowchart LR
 
 ### 4.3 HID 标定链路
 
-目标：把浏览器/服务端里的归一化坐标转换为 ESP32 HID 实际可点击到的屏幕位置。
+目标：把浏览器/服务端里的像素坐标转换为 ESP32 HID 实际可点击到的屏幕位置。
 
 流程：
 
@@ -257,7 +257,7 @@ flowchart LR
   - 通过 `probe` WebSocket 连接服务端。
   - 自动注册 `calibration app` 角色。
   - 响应 `calibration_command`。
-  - 把用户触摸到的归一化点击位置回传给服务端。
+  - 把用户触摸到的本地像素点击位置回传给服务端。
 
 #### 本地 OCR 检查器
 
@@ -362,7 +362,7 @@ flowchart LR
 - `SerialCommandClient`
   - 独占管理串口、后台读日志、等待 `bridge_ack` / `bridge_nack`。
 - `HIDActionExecutor`
-  - 把归一化点位换算成设备坐标。
+  - 把像素点位换算成 raw HID / 设备坐标。
   - 把拖拽拆成多段 `move`，并控制 `press` / `release` 时序。
 
 ### 6.3 辅助脚本层

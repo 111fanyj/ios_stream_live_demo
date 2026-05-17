@@ -81,7 +81,7 @@ open IOSStreamViewer.xcodeproj
 
 1. 连接同一个房间并看到 iOS 画面。
 2. 在“方案编辑”里添加 `waitForText`、`waitForImage`、`tap`、`drag` 动作。
-3. 图片识别可以上传 PNG，也可以从当前视频帧按归一化区域截取模板。
+3. 图片识别可以上传 PNG，也可以从当前视频帧按像素区域截取模板。
 4. 点击“保存并发布 ZIP”，服务端会保存 `automation.json` 和 `images/`。
 5. 在“方案执行”里选择 package 和 revision，点击“开始执行”。
 6. 服务端会按步骤编排流程：
