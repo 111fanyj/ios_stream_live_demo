@@ -896,13 +896,9 @@ textarea {
 
 .editor-layout-react {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   align-items: start;
-}
-
-.workspace-editor-panel .editor-layout-react > :last-child {
-  grid-column: 1 / -1;
 }
 
 .workspace-editor-panel .code-preview-react {
