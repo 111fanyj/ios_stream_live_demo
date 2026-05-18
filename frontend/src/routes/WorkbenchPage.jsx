@@ -52,6 +52,7 @@ const INITIAL_STEP_FORM = {
   commandText: '',
   delayMs: '500',
   loopActionType: 'tap',
+  stopOnTimeout: false,
   targetRef: '',
   targetX: '',
   targetY: '',
@@ -230,6 +231,12 @@ function buildStepDetailLines(step) {
     }
   }
 
+  if (isLoopType(step.type)) {
+    lines.push(
+      `超时处理: ${step.stopOnTimeout ? '中断整个流程' : '继续下一步'}`,
+    )
+  }
+
   if (step.type === 'tap') {
     lines.push(`点击目标: ${formatTargetSummary(step.target)}`)
   }
@@ -331,6 +338,9 @@ function buildStepFromForm(stepForm, currentStepCount) {
       pollIntervalMs: readNumber(stepForm.pollIntervalMs, 500),
       region: null,
       saveAs: String(stepForm.saveAs || '').trim() || `${id}-target`,
+      ...(isLoopType(type)
+        ? { stopOnTimeout: Boolean(stepForm.stopOnTimeout) }
+        : {}),
     }
 
     if (isLoopType(type)) {
@@ -393,6 +403,9 @@ function buildStepFromForm(stepForm, currentStepCount) {
       pollIntervalMs: readNumber(stepForm.pollIntervalMs, 500),
       region: null,
       saveAs: String(stepForm.saveAs || '').trim() || `${id}-target`,
+      ...(isLoopType(type)
+        ? { stopOnTimeout: Boolean(stepForm.stopOnTimeout) }
+        : {}),
     }
 
     if (isLoopType(type)) {
@@ -1723,6 +1736,19 @@ export function WorkbenchPage() {
                       <option value="tap">点击</option>
                       <option value="drag">拖拽</option>
                     </select>
+                  </label>
+                  <label className="field-label checkbox-field-react">
+                    <span>超时后中断流程</span>
+                    <input
+                      checked={Boolean(stepForm.stopOnTimeout)}
+                      type="checkbox"
+                      onChange={(event) =>
+                        handleUpdateStepField(
+                          'stopOnTimeout',
+                          event.target.checked,
+                        )
+                      }
+                    />
                   </label>
                 </div>
               ) : null}

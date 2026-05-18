@@ -49,6 +49,7 @@ struct AutomationStep: Codable {
     let pollIntervalMs: Int?
     let region: AutomationRect?
     let saveAs: String?
+    let stopOnTimeout: Bool?
     let assetId: String?
     let threshold: Double?
     let target: AutomationTarget?
@@ -216,6 +217,16 @@ final class AutomationRunner {
         let elapsedMs = Int(now.timeIntervalSince(stepStartedAt) * 1000)
         let timeoutMs = step.timeoutMs ?? 10_000
         if elapsedMs > timeoutMs {
+            if isLoopStep(step), !(step.stopOnTimeout ?? false) {
+                eventHandler([
+                    "type": "timeout",
+                    "stepId": step.id,
+                    "message": "等待超时，继续下一步"
+                ])
+                advance(to: now)
+                return
+            }
+
             fail(step: step, message: "等待超时")
             return
         }
@@ -589,6 +600,10 @@ final class AutomationRunner {
         }
 
         return queries
+    }
+
+    private func isLoopStep(_ step: AutomationStep) -> Bool {
+        step.type == "loopUntilText" || step.type == "loopUntilImage"
     }
 
     private func emitTap(step: AutomationStep, point: AutomationPoint) {
